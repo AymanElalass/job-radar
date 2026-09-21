@@ -26,14 +26,28 @@ une candidature.
 ### Tri (`job-radar trier`)
 
 1. **Pré-filtre en Python, gratuit** : sont écartées sans aucun appel au LLM les offres en
-   « Profession libérale » (freelance), celles qui exigent explicitement 3 ans d'expérience ou
-   plus, et les doublons de même intitulé et même entreprise. Le détail des offres écartées et
-   de leur motif est affiché.
+   « Profession libérale » (freelance), les **stages** (impossible de signer une convention
+   quand on est déjà diplômé), celles qui exigent explicitement 3 ans d'expérience ou plus, et
+   les doublons de même intitulé et même entreprise. Le détail des offres écartées et de leur
+   motif est affiché.
+
+   Deux détections sont **déterministes**, donc jamais laissées au LLM :
+   - **`rqth`** : entreprise contenant « Talents Handicap » ou URL sur `handicap-job.com`.
+     Avec `exclure_rqth = true`, ces offres sont écartées ; sinon elles portent le drapeau.
+   - **stage** : le mot « stage » ou « stagiaire » dans l'intitulé ou l'URL, ou une tournure
+     de la description qui désigne l'offre elle-même (« en tant que stagiaire », « offre de
+     stage », « le stagiaire sera… »). Le mot seul dans la description ne suffit pas : un poste
+     de formateur parle des stagiaires qu'il encadre, et une offre junior cite le stage parmi
+     les premières expériences acceptées — deux offres à garder.
 2. Les offres restantes partent par **lots de 20** à `claude -p --output-format json`, avec
    seulement l'intitulé, l'entreprise, le lieu, le contrat, l'expérience et les **800 premiers
    caractères** de la description.
 3. Le modèle renvoie, pour chaque offre, un **score sur 100**, un résumé de deux lignes, des
-   **drapeaux** et un **verdict** (`postuler`, `peut-etre`, `non`). La réponse JSON est validée ;
+   **drapeaux** et un **verdict** (`postuler`, `peut-etre`, `non`). Le prompt définit chaque
+   drapeau (ce qu'il signifie *et* ce qu'il ne signifie pas), donne trois exemples d'offres
+   notées, et impose un tri sévère : `postuler` seulement si le candidat a une chance réelle
+   avec son diplôme et son expérience, et un intitulé « confirmé », « senior », « expert » ou
+   « lead » fait chuter le score même quand l'offre affiche « débutant accepté ». La réponse JSON est validée ;
    en cas de réponse inexploitable, une seule nouvelle tentative, puis le lot est signalé en
    erreur sans bloquer les autres. Un lot qui dépasse `delai_max` secondes est abandonné de la
    même façon. Le temps écoulé est affiché pour chaque lot.
@@ -97,6 +111,7 @@ criteres = "~/Documents/cv/criteres-tri.md"   # fichier Markdown, hors du dépô
 modele = "haiku"                              # modèle passé à `claude -p --model`
 taille_lot = 20                               # offres envoyées en une fois
 delai_max = 180                               # secondes par lot, au-delà le lot est abandonné
+exclure_rqth = false                          # true : écarter les offres réservées RQTH
 ```
 
 ### Fichier de critères
@@ -175,6 +190,7 @@ Pour une veille quotidienne, une entrée cron suffit :
 | `--sortie CHEMIN` | autre fichier JSON de sélection (défaut `data/selection.json`) |
 | `--limite N` | ne trier que les N offres les plus récentes (pour tester sans brûler de quota) |
 | `--simulation` | annoncer combien d'offres et de lots partiraient, sans rien envoyer |
+| `--reinitialiser` | effacer les résultats de tri (les offres sont conservées) puis retrier |
 | `--modele NOM` | modèle à utiliser, au lieu de celui de `config.toml` |
 | `--importer FICHIER` | compléter l'historique avec un export JSON (bases d'avant l'étape 2) |
 
@@ -217,8 +233,16 @@ Tri de 13 offre(s) par haiku en 1 lot(s), 180 s au plus par lot :
 ```
 
 Le verdict `postuler` s'affiche en vert, `peut-etre` en jaune, `non` en gris. Les drapeaux
-**éliminatoires** (`permis`, `telephone`, `experience`, `bac5`, `freelance`, `stage_deguise`)
-sortent en rouge, le **télétravail** (`teletravail`, `teletravail_complet`) en vert gras.
+**éliminatoires** (`permis`, `telephone`, `experience`, `bac5`, `freelance`) sortent en rouge,
+le **télétravail** (`teletravail`, `teletravail_complet`) en vert gras.
+
+Après un changement de critères ou de prompt, on peut tout retrier :
+
+```bash
+uv run job-radar trier --reinitialiser --limite 20             # efface, puis retrie
+uv run job-radar trier --reinitialiser --simulation            # n'efface rien, montre le volume
+uv run job-radar trier --limite 20 --modele sonnet             # comparer deux modèles
+```
 
 Les offres déjà triées ne repartent jamais au LLM : relancer la commande ne traite que les
 nouveautés.

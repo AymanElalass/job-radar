@@ -40,6 +40,7 @@ def test_config_complete(tmp_path):
             "modele": "haiku",
             "taille_lot": 20,
             "delai_max": 180,
+            "exclure_rqth": False,
         },
     }
 
@@ -120,6 +121,7 @@ def test_section_tri_lue(tmp_path):
         modele = "sonnet"
         taille_lot = 10
         delai_max = 90
+        exclure_rqth = true
         """,
     )
 
@@ -128,6 +130,7 @@ def test_section_tri_lue(tmp_path):
         "modele": "sonnet",
         "taille_lot": 10,
         "delai_max": 90,
+        "exclure_rqth": True,
     }
 
 
@@ -146,6 +149,7 @@ def test_section_tri_absente_donne_des_valeurs_par_defaut(tmp_path):
     assert tri["modele"] == "haiku"
     assert tri["taille_lot"] == 20
     assert tri["delai_max"] == 180
+    assert tri["exclure_rqth"] is False
 
 
 def test_publiee_depuis_invalide_refuse(tmp_path):

@@ -36,8 +36,22 @@ ce fichier. Aucun autre module n'importe `subprocess`.
 ## Tri par LLM (étape 2)
 
 - **Pré-filtre d'abord, LLM ensuite.** Tout ce qui peut être écarté gratuitement en Python doit
-  l'être : profession libérale, 3 ans d'expérience ou plus exigés (`SEUIL_EXPERIENCE_ANNEES`),
-  doublons intitulé + entreprise. Le nombre d'offres écartées et leur motif sont toujours affichés.
+  l'être : profession libérale, stage (`est_stage`), 3 ans d'expérience ou plus exigés
+  (`SEUIL_EXPERIENCE_ANNEES`), offres RQTH si `exclure_rqth`, doublons intitulé + entreprise. Le
+  nombre d'offres écartées et leur motif sont toujours affichés.
+- **Un filtre gratuit ne doit pas coûter de bonnes offres.** `est_stage` prend l'intitulé et
+  l'URL au mot, mais la description seulement sur les tournures de
+  `MOTIFS_STAGE_DESCRIPTION` : chercher « stage » partout dans la description écartait 19 offres
+  sur 31 à tort, dont cinq postes de formateur (« la compréhension de vos stagiaires ») et une
+  offre junior (« première expérience (stage, alternance) »). Mesurer avant d'élargir un filtre.
+- **Ce qui est vérifiable mécaniquement ne va pas au LLM.** `DRAPEAUX_LLM` liste ce que le modèle
+  peut poser, `DRAPEAUX_DETERMINISTES` ce que Python pose seul (`rqth`, via l'entreprise ou
+  l'URL, dans `ajouter_drapeaux_deterministes`). Ajouter un drapeau au prompt suppose qu'aucun
+  `in` ne suffisait.
+- **Le prompt définit chaque drapeau par ce qu'il est ET ce qu'il n'est pas**, donne trois
+  exemples notés et impose un tri sévère (`postuler` seulement avec une chance réelle ; les
+  intitulés de `MOTS_SENIORITE` font chuter le score malgré « débutant accepté »). Le prompt est
+  assemblé par `replace` et non par `format` : il contient des exemples JSON, donc des accolades.
 - **Lots de 20** (`taille_lot`), et seulement les champs de `CHAMPS_ENVOYES` plus les
   `LONGUEUR_DESCRIPTION` (800) premiers caractères de la description : on n'envoie pas une offre
   entière au modèle.
@@ -56,7 +70,9 @@ ce fichier. Aucun autre module n'importe `subprocess`.
   inexploitable : **une seule** nouvelle tentative, puis le lot est signalé en erreur et les
   autres continuent.
 - **Une offre n'est jamais triée deux fois** : la table `tri` est la mémoire du tri, et
-  `offres_a_trier()` exclut ce qui y figure déjà.
+  `offres_a_trier()` exclut ce qui y figure déjà. `--reinitialiser` vide cette table (jamais les
+  offres) pour retrier après un changement de prompt ou de critères ; en simulation, il n'efface
+  rien, parce qu'une simulation ne doit jamais faire perdre de données.
 - Le **fichier de critères** est personnel et vit hors du dépôt (`[tri].criteres`). Ne jamais le
   versionner ni recopier son contenu dans le dépôt : `criteres.example.md` est la seule version
   publique.

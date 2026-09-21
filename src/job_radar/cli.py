@@ -92,6 +92,7 @@ def charger_config(chemin: str | Path = CHEMIN_CONFIG_DEFAUT) -> dict[str, Any]:
             "modele": str(tri.get("modele") or MODELE_DEFAUT),
             "taille_lot": max(1, int(tri.get("taille_lot", TAILLE_LOT_DEFAUT))),
             "delai_max": max(1, int(tri.get("delai_max", DELAI_MAX_DEFAUT))),
+            "exclure_rqth": bool(tri.get("exclure_rqth", False)),
         },
     }
 
@@ -244,6 +245,12 @@ def construire_parseur() -> argparse.ArgumentParser:
         help="annoncer ce qui partirait au LLM, sans rien envoyer",
     )
     tri.add_argument(
+        "--reinitialiser",
+        action="store_true",
+        help="effacer les résultats de tri existants (les offres sont conservées) "
+        "avant de retrier, par exemple après un changement de critères",
+    )
+    tri.add_argument(
         "--modele",
         default=None,
         help="modèle à utiliser, au lieu de celui de config.toml",
@@ -375,6 +382,19 @@ def commande_trier(args: argparse.Namespace, config: dict[str, Any]) -> int:
             complete = historique.importer_contenu(_lire_json(args.importer_json))
             console.print(f"{complete} offre(s) complétée(s) depuis {args.importer_json}.")
 
+        if args.reinitialiser:
+            if args.simulation:
+                # Effacer serait une vraie perte : la simulation n'en prend pas le risque.
+                console.print(
+                    f"[yellow]Simulation : les {historique.compter_tries()} résultat(s) "
+                    "de tri existants n'ont pas été effacés.[/yellow]"
+                )
+            else:
+                console.print(
+                    f"{historique.effacer_tri()} résultat(s) de tri effacé(s) ; "
+                    "les offres sont conservées."
+                )
+
         a_trier = historique.offres_a_trier(limite=args.limite)
         sans_contenu = historique.compter_sans_contenu()
 
@@ -392,7 +412,7 @@ def commande_trier(args: argparse.Namespace, config: dict[str, Any]) -> int:
                 console.print("Aucune offre à trier : tout est déjà passé au tri.")
             return 0
 
-        retenues, ecartees = prefiltrer(a_trier)
+        retenues, ecartees = prefiltrer(a_trier, exclure_rqth=reglages["exclure_rqth"])
         _afficher_prefiltre(console, len(a_trier), retenues, ecartees)
 
         if not retenues:

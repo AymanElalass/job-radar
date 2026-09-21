@@ -226,3 +226,86 @@ def test_commande_par_defaut_reste_la_collecte():
     assert cli._argv_normalise(["trier", "--limite", "5"]) == ["trier", "--limite", "5"]
     assert cli._argv_normalise(["collecter"]) == ["collecter"]
     assert cli._argv_normalise(["--help"]) == ["--help"]
+
+
+def test_reinitialiser_efface_les_resultats_et_retrie(projet, monkeypatch, capsys):
+    with Historique(projet["base"]) as historique:
+        historique.enregistrer_tri(
+            [
+                {"id": ident, "score": 1, "resume": "", "drapeaux": [], "verdict": "non"}
+                for ident in ("A", "B", "C")
+            ],
+            modele="haiku",
+        )
+
+    client = FauxLLM(
+        reponses=[
+            reponse(
+                {"id": "A", "score": 80, "resume": "", "drapeaux": [], "verdict": "postuler"},
+                {"id": "B", "score": 50, "resume": "", "drapeaux": [], "verdict": "peut-etre"},
+            ),
+            reponse({"id": "C", "score": 5, "resume": "", "drapeaux": [], "verdict": "non"}),
+        ]
+    )
+    monkeypatch.setattr(cli, "creer_client", lambda *_a, **_k: client)
+
+    assert cli.main(arguments(projet, "--reinitialiser")) == 0
+
+    sortie = capsys.readouterr().out
+    assert "3 résultat(s) de tri effacé(s)" in sortie
+    # Les trois offres sont bien reparties au tri, avec de nouveaux verdicts.
+    with Historique(projet["base"]) as historique:
+        assert historique.compter_tries() == 3
+        assert historique.compter() == 3
+
+
+def test_reinitialiser_en_simulation_n_efface_rien(projet, monkeypatch, capsys):
+    with Historique(projet["base"]) as historique:
+        historique.enregistrer_tri(
+            [{"id": "A", "score": 1, "resume": "", "drapeaux": [], "verdict": "non"}],
+            modele="haiku",
+        )
+    monkeypatch.setattr(cli, "creer_client", lambda *_a, **_k: FauxLLM())
+
+    assert cli.main(arguments(projet, "--reinitialiser", "--simulation")) == 0
+
+    assert "n'ont pas été effacés" in capsys.readouterr().out
+    with Historique(projet["base"]) as historique:
+        assert historique.compter_tries() == 1
+
+
+def test_offres_rqth_ecartees_si_la_config_le_demande(tmp_path, monkeypatch, capsys):
+    criteres = tmp_path / "criteres.md"
+    criteres.write_text(CRITERES, encoding="utf-8")
+    config = tmp_path / "config.toml"
+    config.write_text(
+        f"""
+        [recherche]
+        mots_cles = ["testeur"]
+
+        [tri]
+        criteres = "{criteres}"
+        exclure_rqth = true
+        """,
+        encoding="utf-8",
+    )
+    base = tmp_path / "offres.db"
+    with Historique(base) as historique:
+        historique.enregistrer([offre("A"), offre("B", entreprise="Forums Talents Handicap")])
+    monkeypatch.setattr(cli, "creer_client", lambda *_a, **_k: FauxLLM())
+
+    cli.main(["trier", "--config", str(config), "--base", str(base), "--simulation"])
+
+    sortie = capsys.readouterr().out
+    assert "1 retenue(s)" in sortie
+    assert "réservée aux travailleurs handicapés" in sortie
+
+
+def test_offres_rqth_conservees_par_defaut(projet, monkeypatch, capsys):
+    with Historique(projet["base"]) as historique:
+        historique.enregistrer([offre("D", entreprise="Forums Talents Handicap")])
+    monkeypatch.setattr(cli, "creer_client", lambda *_a, **_k: FauxLLM())
+
+    cli.main(arguments(projet, "--simulation"))
+
+    assert "4 offre(s) partiraient" in capsys.readouterr().out

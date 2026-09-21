@@ -30,23 +30,25 @@ CHAMPS_ENVOYES = ("intitule", "entreprise", "lieu", "contrat", "experience")
 SEUIL_EXPERIENCE_ANNEES = 3
 
 #: Drapeaux que le LLM peut poser sur une offre.
-DRAPEAUX_VALIDES = (
+DRAPEAUX_LLM = (
     "permis",
     "telephone",
     "experience",
     "bac5",
     "freelance",
-    "rqth",
-    "stage_deguise",
     "alternance",
     "teletravail",
     "teletravail_complet",
 )
 
+#: Drapeaux posés par Python, sans LLM, parce qu'ils sont vérifiables mécaniquement.
+DRAPEAUX_DETERMINISTES = ("rqth",)
+
+#: Tous les drapeaux acceptés, d'où qu'ils viennent.
+DRAPEAUX_VALIDES = (*DRAPEAUX_LLM, *DRAPEAUX_DETERMINISTES)
+
 #: Drapeaux qui disqualifient une offre : affichés en rouge.
-DRAPEAUX_ELIMINATOIRES = frozenset(
-    {"permis", "telephone", "experience", "bac5", "freelance", "stage_deguise"}
-)
+DRAPEAUX_ELIMINATOIRES = frozenset({"permis", "telephone", "experience", "bac5", "freelance"})
 
 #: Drapeaux valorisants : mis en avant à l'affichage.
 DRAPEAUX_BONUS = frozenset({"teletravail", "teletravail_complet"})
@@ -54,8 +56,14 @@ DRAPEAUX_BONUS = frozenset({"teletravail", "teletravail_complet"})
 VERDICTS = ("postuler", "peut-etre", "non")
 VERDICTS_RETENUS = ("postuler", "peut-etre")
 
+#: Entreprises et domaines qui signent une offre réservée aux travailleurs handicapés.
+MARQUEURS_RQTH_ENTREPRISE = ("talents handicap",)
+MARQUEURS_RQTH_URL = ("handicap-job.com",)
+
 MOTIF_LIBERALE = "profession libérale (freelance)"
 MOTIF_EXPERIENCE = f"{SEUIL_EXPERIENCE_ANNEES} ans d'expérience ou plus exigés"
+MOTIF_STAGE = "stage (convention impossible, diplôme déjà obtenu)"
+MOTIF_RQTH = "offre réservée aux travailleurs handicapés (exclure_rqth)"
 MOTIF_DOUBLON = "doublon (même intitulé, même entreprise)"
 
 
@@ -121,6 +129,54 @@ def exige_experience_longue(offre: dict[str, Any]) -> bool:
     return annees is not None and annees >= SEUIL_EXPERIENCE_ANNEES
 
 
+def est_rqth(offre: dict[str, Any]) -> bool:
+    """Vrai si l'offre passe par un canal réservé aux travailleurs handicapés.
+
+    Vérifiable mécaniquement : l'entreprise porte « Talents Handicap », ou l'offre
+    vient de handicap-job.com. Inutile de demander au LLM ce qu'un `in` suffit à voir.
+    """
+    entreprise = _sans_accents(offre.get("entreprise") or "")
+    url = (offre.get("url") or "").casefold()
+
+    return any(marqueur in entreprise for marqueur in MARQUEURS_RQTH_ENTREPRISE) or any(
+        marqueur in url for marqueur in MARQUEURS_RQTH_URL
+    )
+
+
+#: Le mot « stage » dans l'intitulé ou l'URL désigne l'offre elle-même.
+MOTIF_MOT_STAGE = re.compile(r"\bstages?\b|\bstagiaires?\b")
+
+#: Dans la description, le mot seul ne suffit pas : « la compréhension de vos stagiaires »
+#: décrit un poste de formateur et « première expérience (stage, alternance) » un poste
+#: ouvert aux débutants — deux offres à garder. Seules ces tournures disent que l'offre
+#: EST un stage.
+MOTIFS_STAGE_DESCRIPTION = re.compile(
+    r"\ben tant que stagiaire\b"
+    r"|\bvous serez stagiaire\b"
+    r"|\b(offre|contrat|convention|type de contrat) (de |d'|: ?)?stage\b"
+    r"|\bstage (de |d')?\d+ (mois|semaines?)\b"
+    r"|\b(recherch|recrut|propos)\w* (un|une|des) (stagiaire|stage)\b"
+    r"|\bstage (conventionne|obligatoire|de fin d)\w*"
+    r"|\b(le|la|notre) stagiaire\b"
+)
+
+
+def est_stage(offre: dict[str, Any]) -> bool:
+    """Vrai si l'offre est un stage.
+
+    Un stage suppose une convention avec un établissement, impossible pour un
+    candidat déjà diplômé. L'intitulé et l'URL sont pris au mot ; la description,
+    elle, n'est retenue que sur des tournures qui désignent l'offre elle-même
+    (voir :data:`MOTIFS_STAGE_DESCRIPTION`).
+    """
+    for champ in ("intitule", "url"):
+        if MOTIF_MOT_STAGE.search(_sans_accents(str(offre.get(champ) or ""))):
+            return True
+
+    description = _sans_accents(str(offre.get("description") or ""))
+    return MOTIFS_STAGE_DESCRIPTION.search(description) is not None
+
+
 def _cle_doublon(offre: dict[str, Any]) -> tuple[str, str]:
     return (
         _sans_accents(offre.get("intitule") or "").strip(),
@@ -130,11 +186,14 @@ def _cle_doublon(offre: dict[str, Any]) -> tuple[str, str]:
 
 def prefiltrer(
     offres: Iterable[dict[str, Any]],
+    exclure_rqth: bool = False,
 ) -> tuple[list[dict[str, Any]], list[tuple[dict[str, Any], str]]]:
     """Sépare les offres à envoyer au LLM de celles écartées, avec leur motif.
 
     Aucun appel réseau ni LLM : ce filtre ne coûte rien et retire l'essentiel
-    du bruit avant de dépenser du quota.
+    du bruit avant de dépenser du quota. Avec ``exclure_rqth``, les offres des
+    canaux réservés aux travailleurs handicapés sont écartées ; sinon elles sont
+    conservées et porteront le drapeau ``rqth``.
     """
     retenues: list[dict[str, Any]] = []
     ecartees: list[tuple[dict[str, Any], str]] = []
@@ -144,8 +203,14 @@ def prefiltrer(
         if est_profession_liberale(offre):
             ecartees.append((offre, MOTIF_LIBERALE))
             continue
+        if est_stage(offre):
+            ecartees.append((offre, MOTIF_STAGE))
+            continue
         if exige_experience_longue(offre):
             ecartees.append((offre, MOTIF_EXPERIENCE))
+            continue
+        if exclure_rqth and est_rqth(offre):
+            ecartees.append((offre, MOTIF_RQTH))
             continue
 
         cle = _cle_doublon(offre)
@@ -181,6 +246,50 @@ def resumer_pour_llm(offre: dict[str, Any]) -> dict[str, Any]:
     return resume
 
 
+#: Mots d'un intitulé qui trahissent un poste non junior, quoi que dise l'offre.
+MOTS_SENIORITE = ("confirme", "senior", "expert", "lead")
+
+DEFINITIONS_DRAPEAUX = """\
+- "permis" : le permis de conduire ou un véhicule est exigé, ou le poste implique des
+  déplacements que seul un conducteur peut assurer. Ne pas poser ce drapeau parce que
+  l'offre est loin ou mal desservie.
+- "telephone" : le travail consiste en tout ou partie à appeler ou être appelé (hotline,
+  standard, télévente, support téléphonique). Ne pas poser ce drapeau parce qu'un numéro
+  figure dans l'annonce, ni pour un poste où le téléphone est accessoire.
+- "experience" : une expérience professionnelle significative est exigée, ou l'annonce
+  décrit des attendus qu'un débutant ne peut pas tenir. Poser ce drapeau même si le
+  champ « expérience » indique « débutant accepté » quand le texte dit le contraire.
+- "bac5" : un diplôme bac+5, un master, un diplôme d'ingénieur ou un doctorat est exigé.
+  Ne pas poser ce drapeau si bac+2 ou bac+3 suffit, ni si le diplôme n'est pas précisé.
+- "freelance" : le poste suppose un statut indépendant, une auto-entreprise, un portage
+  ou une commission plutôt qu'un salaire.
+- "alternance" : le poste est en alternance, en apprentissage ou en contrat de
+  professionnalisation.
+- "teletravail" : du télétravail partiel est explicitement proposé (jours par semaine,
+  hybride). Ne pas poser ce drapeau si l'annonce n'en parle pas.
+- "teletravail_complet" : le poste est intégralement à distance ou en full remote.
+"""
+
+EXEMPLES = """\
+Exemple noté « postuler » :
+  {"intitule": "Chargé de recette applicative (H/F)", "experience": "Débutant accepté",
+   "description": "Vous exécutez les cas de test, rédigez les anomalies, formation assurée."}
+  → {"score": 88, "verdict": "postuler", "drapeaux": [],
+     "resume": "Recette applicative junior, formation assurée : correspond au poste visé."}
+
+Exemple noté « peut-etre » :
+  {"intitule": "Technicien support informatique (H/F)", "experience": "2 An(s)",
+   "description": "Support de proximité, installation de postes, gestion des tickets."}
+  → {"score": 52, "verdict": "peut-etre", "drapeaux": ["experience"],
+     "resume": "Support de proximité à l'écrit et sur site, mais deux ans d'expérience demandés."}
+
+Exemple noté « non » :
+  {"intitule": "Développeur Java confirmé (H/F)", "experience": "Débutant accepté",
+   "description": "Vous concevez l'architecture des microservices et encadrez deux juniors."}
+  → {"score": 12, "verdict": "non", "drapeaux": ["experience"],
+     "resume": "Poste confirmé avec encadrement et architecture : hors de portée sans expérience."}
+"""
+
 CONSIGNES = f"""Tu tries des offres d'emploi pour un candidat, selon ses critères.
 
 Critères du candidat :
@@ -188,19 +297,28 @@ Critères du candidat :
 {{criteres}}
 ---
 
+Sois SÉVÈRE. Le but n'est pas de trouver quelque chose à dire sur chaque offre, mais
+d'isoler les rares offres où ce candidat a une vraie chance :
+
+- "postuler" UNIQUEMENT si le candidat a une chance réelle d'être retenu avec une
+  licence (bac+3) et sans expérience professionnelle. En cas de doute, "peut-etre".
+- Un intitulé contenant {list(MOTS_SENIORITE)} désigne un poste non junior : le score
+  baisse fortement, même si le champ « expérience » indique « débutant accepté », et le
+  verdict ne peut pas être "postuler".
+- Un poste qui exige des compétences ou des responsabilités qu'un débutant ne peut pas
+  tenir n'est pas "postuler", quoi qu'affiche le champ « expérience ».
+- Un métier sans rapport avec le profil se note bas, sans chercher de rapprochement.
+
 Pour chacune des {{nombre}} offres ci-dessous, produis un objet JSON avec :
 - "id" : l'identifiant de l'offre, recopié tel quel
-- "score" : entier de 0 à 100, adéquation avec les critères (100 = idéal)
+- "score" : entier de 0 à 100, chance réelle d'être retenu et intérêt du poste
 - "resume" : deux lignes maximum, en français, ce que fait le poste et pourquoi il colle ou non
-- "drapeaux" : liste, éventuellement vide, choisie STRICTEMENT parmi
-  {list(DRAPEAUX_VALIDES)}
-  ("permis" = permis de conduire exigé, "telephone" = travail au téléphone,
-  "experience" = expérience significative exigée, "bac5" = bac+5 ou plus exigé,
-  "freelance" = statut indépendant, "rqth" = poste ouvert aux travailleurs handicapés,
-  "stage_deguise" = poste junior aux responsabilités de senior, "alternance" = alternance,
-  "teletravail" = télétravail partiel, "teletravail_complet" = télétravail intégral)
+- "drapeaux" : liste, éventuellement vide, choisie STRICTEMENT parmi {list(DRAPEAUX_LLM)}.
+  Un drapeau se pose sur ce que l'annonce dit, pas sur une supposition :
+{DEFINITIONS_DRAPEAUX}
 - "verdict" : "postuler", "peut-etre" ou "non"
 
+{EXEMPLES}
 Réponds UNIQUEMENT par un tableau JSON de {{nombre}} objets, sans texte autour,
 sans bloc de code, sans commentaire.
 
@@ -210,12 +328,16 @@ Offres :
 
 
 def construire_prompt(criteres: str, lot: list[dict[str, Any]]) -> str:
-    """Assemble le prompt d'un lot : critères du candidat + offres réduites."""
+    """Assemble le prompt d'un lot : critères du candidat + offres réduites.
+
+    La substitution est faite par remplacement et non par ``format`` : le prompt
+    contient des exemples JSON, donc des accolades que ``format`` interpréterait.
+    """
     offres = [resumer_pour_llm(offre) for offre in lot]
-    return CONSIGNES.format(
-        criteres=criteres,
-        nombre=len(lot),
-        offres=json.dumps(offres, ensure_ascii=False, indent=2),
+    return (
+        CONSIGNES.replace("{criteres}", criteres)
+        .replace("{nombre}", str(len(lot)))
+        .replace("{offres}", json.dumps(offres, ensure_ascii=False, indent=2))
     )
 
 
@@ -300,17 +422,37 @@ def _deux_lignes(resume: Any) -> str:
 # ------------------------------------------------------------------------- tri
 
 
+def ajouter_drapeaux_deterministes(
+    lot: list[dict[str, Any]], resultats: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Ajoute aux résultats les drapeaux que Python sait poser seul.
+
+    Le LLM ne se prononce pas sur ``rqth`` : l'information est dans l'entreprise ou
+    l'URL de l'offre, donc vérifiable sans lui — et sans risque d'oubli.
+    """
+    par_id = {offre["id"]: offre for offre in lot}
+
+    for resultat in resultats:
+        offre = par_id.get(resultat["id"])
+        if offre is not None and est_rqth(offre) and "rqth" not in resultat["drapeaux"]:
+            resultat["drapeaux"].append("rqth")
+
+    return resultats
+
+
 def trier_lot(client: ClientLLM, criteres: str, lot: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Fait noter un lot par le LLM, avec une seule nouvelle tentative si besoin."""
     prompt = construire_prompt(criteres, lot)
     ids = [offre["id"] for offre in lot]
 
     try:
-        return valider_reponse(client(prompt), ids)
+        notees = valider_reponse(client(prompt), ids)
     except ErreurReponseLLM:
         # Une réponse mal formée est souvent un accident : on réessaie une fois,
         # puis on abandonne ce lot pour ne pas bloquer les suivants.
-        return valider_reponse(client(prompt), ids)
+        notees = valider_reponse(client(prompt), ids)
+
+    return ajouter_drapeaux_deterministes(lot, notees)
 
 
 def trier(

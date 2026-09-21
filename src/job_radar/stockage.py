@@ -207,6 +207,15 @@ class Historique:
         self.connexion.commit()
         return curseur.rowcount
 
+    def effacer_tri(self) -> int:
+        """Efface tous les résultats de tri, sans toucher aux offres.
+
+        Sert à retrier l'ensemble après un changement de prompt ou de critères.
+        """
+        curseur = self.connexion.execute("DELETE FROM tri")
+        self.connexion.commit()
+        return curseur.rowcount
+
     def compter(self) -> int:
         """Nombre total d'offres dans l'historique."""
         return self.connexion.execute("SELECT COUNT(*) FROM offres").fetchone()[0]

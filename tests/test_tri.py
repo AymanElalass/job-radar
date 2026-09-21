@@ -10,17 +10,25 @@ import pytest
 from faux_reseau import FauxLLM
 from job_radar.llm import ErreurLLM
 from job_radar.tri import (
+    DRAPEAUX_LLM,
+    DRAPEAUX_VALIDES,
     LONGUEUR_DESCRIPTION,
     MOTIF_DOUBLON,
     MOTIF_EXPERIENCE,
     MOTIF_LIBERALE,
+    MOTIF_RQTH,
+    MOTIF_STAGE,
+    MOTS_SENIORITE,
     ErreurReponseLLM,
     ErreurTri,
+    ajouter_drapeaux_deterministes,
     annees_experience,
     charger_criteres,
     construire_prompt,
     decouper_en_lots,
     est_profession_liberale,
+    est_rqth,
+    est_stage,
     exige_experience_longue,
     fusionner,
     prefiltrer,
@@ -484,3 +492,206 @@ def test_motif_rapporte_quand_le_lot_est_abandonne():
     notees, motif = bilans[0]
     assert notees == 0
     assert "délai dépassé" in motif
+
+
+# -------------------------------------------------- détections déterministes
+
+
+@pytest.mark.parametrize(
+    "champs",
+    [
+        {"entreprise": "Forums Talents Handicap"},
+        {"entreprise": "TALENTS HANDICAP RECRUTEMENT"},
+        {"entreprise": "Talents handicap"},
+        {"url": "https://www.handicap-job.com/offre/12345"},
+        {"url": "HTTPS://HANDICAP-JOB.COM/offre/1"},
+    ],
+)
+def test_offre_rqth_detectee(champs):
+    assert est_rqth(offre("A", **champs)) is True
+
+
+@pytest.mark.parametrize(
+    "champs",
+    [
+        {"entreprise": "ACME"},
+        {"entreprise": None},
+        {"url": "https://candidat.francetravail.fr/offres/detail/A"},
+        {"entreprise": "Cabinet Handicap Conseil"},
+    ],
+)
+def test_offre_non_rqth(champs):
+    assert est_rqth(offre("A", **champs)) is False
+
+
+@pytest.mark.parametrize(
+    "champs",
+    [
+        # L'intitulé et l'URL sont pris au mot.
+        {"intitule": "Stage Développeur Web (H/F)"},
+        {"intitule": "STAGE QA"},
+        {"intitule": "Offre de stages multiples"},
+        {"intitule": "Stagiaire recette (H/F)"},
+        {"url": "https://exemple.fr/offres/stage-testeur"},
+        {"url": "https://handicap-job.com/detail/developpeur-cloud-stage.html"},
+        # Dans la description, seules les tournures qui désignent l'offre elle-même.
+        {"description": "En tant que stagiaire en développement Java, vos tâches…"},
+        {"description": "Nous proposons un stage en recette applicative."},
+        {"description": "Offre de stage de 6 mois à pourvoir."},
+        {"description": "Un stage de 6 mois, conventionné par votre école."},
+        {"description": "Le stagiaire sera accompagné par un référent."},
+        {"description": "Type de contrat : stage"},
+        {"description": "Stage de fin d'études en data."},
+    ],
+)
+def test_stage_detecte(champs):
+    assert est_stage(offre("A", **champs)) is True
+
+
+@pytest.mark.parametrize(
+    "champs",
+    [
+        {"intitule": "Testeur QA", "description": "Poste en CDI."},
+        {"description": "Marché en stagnation, équipe stable."},
+        {"intitule": "Chargé de recette", "description": "Vous montez sur scène ?"},
+        {"intitule": None, "description": None, "url": None},
+        # Cas réels que la détection ne doit pas écarter : un poste de formateur
+        # parle des stagiaires qu'il encadre, et une offre junior cite le stage
+        # parmi les premières expériences acceptées.
+        {
+            "intitule": "Formateur testeur levage/CACES (H/F)",
+            "description": "Des supports de formation pour une meilleure "
+            "compréhension de vos stagiaires.",
+        },
+        {
+            "intitule": "Développeur Cobol - junior (H/F)",
+            "description": "Débutant accepté ou première expérience (stage, "
+            "alternance ou projet académique) en développement.",
+        },
+        {
+            "intitule": "Chargé de recette (H/F)",
+            "description": "Vous encadrerez nos stagiaires sur les campagnes de test.",
+        },
+    ],
+)
+def test_pas_un_stage(champs):
+    assert est_stage(offre("A", **champs)) is False
+
+
+def test_stage_ecarte_au_prefiltre():
+    retenues, ecartees = prefiltrer([offre("A"), offre("B", intitule="Stage QA (H/F)")])
+
+    assert [o["id"] for o in retenues] == ["A"]
+    assert ecartees == [(offre("B", intitule="Stage QA (H/F)"), MOTIF_STAGE)]
+
+
+def test_rqth_conservee_par_defaut():
+    rqth = offre("B", entreprise="Forums Talents Handicap")
+
+    retenues, ecartees = prefiltrer([offre("A"), rqth])
+
+    assert [o["id"] for o in retenues] == ["A", "B"]
+    assert ecartees == []
+
+
+def test_rqth_ecartee_si_demande():
+    rqth = offre("B", entreprise="Forums Talents Handicap")
+
+    retenues, ecartees = prefiltrer([offre("A"), rqth], exclure_rqth=True)
+
+    assert [o["id"] for o in retenues] == ["A"]
+    assert ecartees == [(rqth, MOTIF_RQTH)]
+
+
+def test_drapeau_rqth_ajoute_sans_llm():
+    lot = [offre("A", entreprise="Forums Talents Handicap"), offre("B")]
+    resultats = [
+        {"id": "A", "score": 70, "resume": "", "drapeaux": [], "verdict": "postuler"},
+        {"id": "B", "score": 40, "resume": "", "drapeaux": ["permis"], "verdict": "non"},
+    ]
+
+    enrichis = ajouter_drapeaux_deterministes(lot, resultats)
+
+    assert enrichis[0]["drapeaux"] == ["rqth"]
+    assert enrichis[1]["drapeaux"] == ["permis"]
+
+
+def test_drapeau_rqth_non_duplique():
+    lot = [offre("A", entreprise="Forums Talents Handicap")]
+    resultats = [
+        {"id": "A", "score": 70, "resume": "", "drapeaux": ["rqth"], "verdict": "postuler"}
+    ]
+
+    assert ajouter_drapeaux_deterministes(lot, resultats)[0]["drapeaux"] == ["rqth"]
+
+
+def test_drapeau_rqth_pose_par_le_tri_d_un_lot():
+    client = FauxLLM(
+        reponses=[
+            reponse({"id": "A", "score": 70, "resume": "ok", "drapeaux": [], "verdict": "postuler"})
+        ]
+    )
+
+    resultats = trier_lot(client, CRITERES, [offre("A", entreprise="Forums Talents Handicap")])
+
+    assert resultats[0]["drapeaux"] == ["rqth"]
+
+
+# ------------------------------------------------------------------ prompt
+
+
+def test_le_llm_ne_choisit_ni_rqth_ni_stage_deguise():
+    prompt = construire_prompt(CRITERES, [offre("A")])
+
+    # rqth est déterminé en Python, stage_deguise a été supprimé.
+    assert "rqth" not in prompt
+    assert "stage_deguise" not in prompt
+    assert "rqth" not in DRAPEAUX_LLM
+    assert "stage_deguise" not in DRAPEAUX_VALIDES
+
+
+def test_chaque_drapeau_du_llm_est_defini_dans_le_prompt():
+    prompt = construire_prompt(CRITERES, [offre("A")])
+
+    for drapeau in DRAPEAUX_LLM:
+        assert f'"{drapeau}" :' in prompt, f"{drapeau} n'est pas défini"
+
+
+def test_le_prompt_exige_un_tri_severe():
+    prompt = construire_prompt(CRITERES, [offre("A")])
+
+    assert "SÉVÈRE" in prompt
+    assert "chance réelle d'être retenu" in prompt
+    for mot in MOTS_SENIORITE:
+        assert mot in prompt
+
+
+def test_le_prompt_contient_trois_exemples_notes():
+    prompt = construire_prompt(CRITERES, [offre("A")])
+
+    assert prompt.count("Exemple noté") == 3
+    for verdict in ("postuler", "peut-etre", "non"):
+        assert f"Exemple noté « {verdict} »" in prompt
+
+
+def test_le_prompt_reste_valide_malgre_les_accolades_des_exemples():
+    # Les exemples JSON contiennent des accolades : la substitution ne doit pas
+    # les interpréter comme des champs à remplacer.
+    prompt = construire_prompt("critères {particuliers}", [offre("A")])
+
+    assert "critères {particuliers}" in prompt
+    assert '"intitule": "Chargé de recette applicative (H/F)"' in prompt
+
+
+def test_drapeau_supprime_ignore_dans_une_reponse():
+    texte = reponse(
+        {
+            "id": "A",
+            "score": 50,
+            "resume": "",
+            "drapeaux": ["stage_deguise", "permis"],
+            "verdict": "non",
+        }
+    )
+
+    assert valider_reponse(texte, ["A"])[0]["drapeaux"] == ["permis"]

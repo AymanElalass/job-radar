@@ -38,3 +38,8 @@ taille_lot = 20
 # Délai maximal par lot, en secondes. Au-delà, le lot est abandonné et signalé,
 # et les lots suivants partent quand même.
 delai_max = 180
+
+# Offres des canaux réservés aux travailleurs handicapés (« Talents Handicap »,
+# handicap-job.com) : true les écarte au pré-filtre, false les conserve avec le
+# drapeau rqth.
+exclure_rqth = false

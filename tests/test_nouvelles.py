@@ -157,3 +157,26 @@ def test_offres_sans_contenu_non_triables_puis_importees(tmp_path):
         assert complete == 2
         assert base.compter_sans_contenu() == 0
         assert {o["id"] for o in base.offres_a_trier()} == {"A", "B"}
+
+
+def test_effacer_tri_conserve_les_offres(historique):
+    historique.enregistrer([offre("A"), offre("B")])
+    historique.enregistrer_tri(
+        [
+            {"id": "A", "score": 70, "resume": "", "drapeaux": [], "verdict": "postuler"},
+            {"id": "B", "score": 10, "resume": "", "drapeaux": [], "verdict": "non"},
+        ],
+        modele="haiku",
+    )
+
+    efface = historique.effacer_tri()
+
+    assert efface == 2
+    assert historique.compter_tries() == 0
+    assert historique.compter() == 2
+    # Les offres redeviennent triables.
+    assert {o["id"] for o in historique.offres_a_trier()} == {"A", "B"}
+
+
+def test_effacer_un_tri_vide(historique):
+    assert historique.effacer_tri() == 0
