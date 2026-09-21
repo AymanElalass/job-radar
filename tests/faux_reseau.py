@@ -78,3 +78,25 @@ class FauxClient:
         if self.resultats_par_appel:
             return self.resultats_par_appel.pop(0)
         return [{"id": f"OFFRE-{len(self.appels)}", "intitule": "Poste"}]
+
+
+class FauxLLM:
+    """Client LLM factice : enregistre les prompts, renvoie des réponses programmées.
+
+    Aucun appel à ``claude`` : les réponses sont fournies par le test.
+    """
+
+    def __init__(self, reponses: list[str] | None = None, defaut: str = "[]") -> None:
+        self.reponses = list(reponses or [])
+        self.defaut = defaut
+        self.prompts: list[str] = []
+
+    def __call__(self, prompt: str) -> str:
+        self.prompts.append(prompt)
+        if self.reponses:
+            return self.reponses.pop(0)
+        return self.defaut
+
+    @property
+    def appels(self) -> int:
+        return len(self.prompts)

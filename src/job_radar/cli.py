@@ -7,10 +7,13 @@ import json
 import os
 import sys
 import tomllib
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
+from rich.console import Console
+from rich.table import Table
 
 from job_radar.client import (
     PUBLIEE_DEPUIS_VALIDES,
@@ -21,10 +24,24 @@ from job_radar.client import (
     normaliser_mot_cle,
     reduire_offre,
 )
+from job_radar.llm import MODELE_DEFAUT, creer_client
 from job_radar.stockage import CHEMIN_BASE_DEFAUT, Historique
+from job_radar.tri import (
+    DRAPEAUX_BONUS,
+    DRAPEAUX_ELIMINATOIRES,
+    TAILLE_LOT_DEFAUT,
+    VERDICTS_RETENUS,
+    ErreurTri,
+    charger_criteres,
+    decouper_en_lots,
+    fusionner,
+    prefiltrer,
+    trier,
+)
 
 CHEMIN_CONFIG_DEFAUT = Path("config.toml")
 CHEMIN_SORTIE_DEFAUT = Path("data/nouvelles.json")
+CHEMIN_SELECTION_DEFAUT = Path("data/selection.json")
 
 
 class ErreurConfiguration(RuntimeError):
@@ -61,11 +78,19 @@ def charger_config(chemin: str | Path = CHEMIN_CONFIG_DEFAUT) -> dict[str, Any]:
             f"publiee_depuis doit valoir l'une de {PUBLIEE_DEPUIS_VALIDES}, reçu {publiee_depuis}."
         )
 
+    tri = brut.get("tri") or {}
+
     return {
         "mots_cles": mots_cles,
         "departements": [str(dept) for dept in departements],
         "publiee_depuis": publiee_depuis,
         "pages_max": max(1, int(recherche.get("pages_max", 1))),
+        "tri": {
+            # Le fichier de critères vit hors du dépôt : il est personnel.
+            "criteres": str(tri["criteres"]) if tri.get("criteres") else None,
+            "modele": str(tri.get("modele") or MODELE_DEFAUT),
+            "taille_lot": max(1, int(tri.get("taille_lot", TAILLE_LOT_DEFAUT))),
+        },
     }
 
 
@@ -155,43 +180,115 @@ def construire_parseur() -> argparse.ArgumentParser:
         prog="job-radar",
         description="Veille d'offres d'emploi via l'API France Travail (Offres d'emploi v2).",
     )
-    parseur.add_argument(
+    sous_parseurs = parseur.add_subparsers(dest="commande")
+
+    commun = argparse.ArgumentParser(add_help=False)
+    commun.add_argument(
         "--config",
         default=CHEMIN_CONFIG_DEFAUT,
         type=Path,
         help=f"fichier TOML des critères (défaut : {CHEMIN_CONFIG_DEFAUT})",
     )
-    parseur.add_argument(
+    commun.add_argument(
         "--base",
         default=CHEMIN_BASE_DEFAUT,
         type=Path,
         help=f"base SQLite de l'historique (défaut : {CHEMIN_BASE_DEFAUT})",
     )
-    parseur.add_argument(
+
+    collecte = sous_parseurs.add_parser(
+        "collecter",
+        parents=[commun],
+        help="interroger France Travail et afficher les offres jamais vues (par défaut)",
+    )
+    collecte.add_argument(
         "--sortie",
         default=CHEMIN_SORTIE_DEFAUT,
         type=Path,
         help=f"fichier JSON des nouvelles offres (défaut : {CHEMIN_SORTIE_DEFAUT})",
     )
-    parseur.add_argument(
+    collecte.add_argument(
         "--sans-historique",
         action="store_true",
         help="afficher les offres sans rien enregistrer dans l'historique",
     )
-    parseur.add_argument(
+    collecte.add_argument(
         "--silencieux",
         action="store_true",
         help="ne pas détailler la progression des recherches",
     )
+
+    tri = sous_parseurs.add_parser(
+        "trier",
+        parents=[commun],
+        help="trier par LLM les offres collectées et pas encore triées",
+    )
+    tri.add_argument(
+        "--sortie",
+        default=CHEMIN_SELECTION_DEFAUT,
+        type=Path,
+        help=f"fichier JSON de la sélection (défaut : {CHEMIN_SELECTION_DEFAUT})",
+    )
+    tri.add_argument(
+        "--limite",
+        type=int,
+        default=None,
+        metavar="N",
+        help="ne trier que les N offres les plus récentes",
+    )
+    tri.add_argument(
+        "--simulation",
+        action="store_true",
+        help="annoncer ce qui partirait au LLM, sans rien envoyer",
+    )
+    tri.add_argument(
+        "--modele",
+        default=None,
+        help="modèle à utiliser, au lieu de celui de config.toml",
+    )
+    tri.add_argument(
+        "--importer",
+        dest="importer_json",
+        type=Path,
+        default=None,
+        metavar="FICHIER",
+        help=(
+            "compléter l'historique avec le contenu d'un export JSON (bases créées avant l'étape 2)"
+        ),
+    )
     return parseur
+
+
+#: Sous-commandes reconnues ; toute autre entrée est traitée comme « collecter ».
+COMMANDES = ("collecter", "trier")
+
+
+def _argv_normalise(argv: list[str]) -> list[str]:
+    """Ajoute la sous-commande par défaut pour garder ``job-radar`` seul fonctionnel."""
+    if argv and (argv[0] in COMMANDES or argv[0] in ("-h", "--help")):
+        return argv
+    return ["collecter", *argv]
 
 
 def main(argv: list[str] | None = None) -> int:
     """Point d'entrée de la commande ``job-radar``."""
+    argv = _argv_normalise(list(argv if argv is not None else sys.argv[1:]))
     args = construire_parseur().parse_args(argv)
 
     try:
         config = charger_config(args.config)
+    except ErreurConfiguration as erreur:
+        print(f"Erreur : {erreur}", file=sys.stderr)
+        return 2
+
+    if args.commande == "trier":
+        return commande_trier(args, config)
+    return commande_collecter(args, config)
+
+
+def commande_collecter(args: argparse.Namespace, config: dict[str, Any]) -> int:
+    """Collecte les offres et n'affiche que celles jamais vues."""
+    try:
         client_id, client_secret = lire_identifiants()
     except ErreurConfiguration as erreur:
         print(f"Erreur : {erreur}", file=sys.stderr)
@@ -232,8 +329,185 @@ def main(argv: list[str] | None = None) -> int:
         afficher(nouvelles)
         ecrire_json(nouvelles, args.sortie)
         print(f"\nDétail complet écrit dans {args.sortie}")
+        print("Triez-les avec : job-radar trier")
 
     return 0
+
+
+LARGEUR_HORS_TERMINAL = 150
+
+
+def creer_console() -> Console:
+    """Console rich adaptée à la sortie.
+
+    Hors terminal (redirection, cron), rich se rabat sur 80 colonnes et le tableau
+    devient illisible : on force alors une largeur confortable.
+    """
+    if sys.stdout.isatty():
+        return Console()
+    return Console(width=int(os.environ.get("COLUMNS") or LARGEUR_HORS_TERMINAL))
+
+
+def commande_trier(args: argparse.Namespace, config: dict[str, Any]) -> int:
+    """Trie les offres collectées et pas encore triées : pré-filtre, puis LLM."""
+    console = creer_console()
+    reglages = config["tri"]
+    modele = args.modele or reglages["modele"]
+
+    if not reglages["criteres"]:
+        print(
+            "Erreur : renseignez [tri].criteres dans config.toml (chemin du fichier "
+            "Markdown de critères, voir criteres.example.md).",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        criteres = charger_criteres(reglages["criteres"])
+    except ErreurTri as erreur:
+        print(f"Erreur : {erreur}", file=sys.stderr)
+        return 2
+
+    with Historique(args.base) as historique:
+        if args.importer_json is not None:
+            complete = historique.importer_contenu(_lire_json(args.importer_json))
+            console.print(f"{complete} offre(s) complétée(s) depuis {args.importer_json}.")
+
+        a_trier = historique.offres_a_trier(limite=args.limite)
+        sans_contenu = historique.compter_sans_contenu()
+
+        if sans_contenu:
+            console.print(
+                f"[yellow]{sans_contenu} offre(s) de l'historique sont stockées sans leur "
+                "contenu et ne peuvent pas être triées ; relancez-les avec "
+                "[bold]--importer data/nouvelles.json[/bold].[/yellow]"
+            )
+
+        if not a_trier:
+            if sans_contenu:
+                console.print("Aucune offre triable : voir le message ci-dessus.")
+            else:
+                console.print("Aucune offre à trier : tout est déjà passé au tri.")
+            return 0
+
+        retenues, ecartees = prefiltrer(a_trier)
+        _afficher_prefiltre(console, len(a_trier), retenues, ecartees)
+
+        if not retenues:
+            return 0
+
+        lots = list(decouper_en_lots(retenues, reglages["taille_lot"]))
+        if args.simulation:
+            console.print(
+                f"\n[bold]Simulation[/bold] : {len(retenues)} offre(s) partiraient au "
+                f"modèle [bold]{modele}[/bold] en {len(lots)} lot(s) de "
+                f"{reglages['taille_lot']} au maximum. Rien n'a été envoyé."
+            )
+            return 0
+
+        def progression(numero: int, total: int, taille: int) -> None:
+            console.print(f"  lot {numero}/{total} ({taille} offres) → {modele}…")
+
+        console.print(
+            f"\nTri de {len(retenues)} offre(s) par [bold]{modele}[/bold] en {len(lots)} lot(s) :"
+        )
+        resultats, erreurs = trier(
+            creer_client(modele),
+            criteres,
+            retenues,
+            taille_lot=reglages["taille_lot"],
+            rappel=progression,
+        )
+        historique.enregistrer_tri(resultats, modele)
+
+    for erreur in erreurs:
+        print(f"  ! {erreur}", file=sys.stderr)
+
+    classees = fusionner(retenues, resultats)
+    afficher_tri(console, classees)
+
+    selection = [offre for offre in classees if offre["verdict"] in VERDICTS_RETENUS]
+    ecrire_json(selection, args.sortie)
+    console.print(
+        f"\n{len(selection)} offre(s) retenue(s) sur {len(classees)} triée(s) → {args.sortie}"
+    )
+    return 1 if erreurs and not resultats else 0
+
+
+def _lire_json(chemin: Path) -> list[dict[str, Any]]:
+    """Lit un export JSON d'offres réduites."""
+    charge = json.loads(Path(chemin).read_text(encoding="utf-8"))
+    if not isinstance(charge, list):
+        raise ErreurConfiguration(f"{chemin} ne contient pas une liste d'offres")
+    return charge
+
+
+def _afficher_prefiltre(
+    console: Console,
+    total: int,
+    retenues: list[dict[str, Any]],
+    ecartees: list[tuple[dict[str, Any], str]],
+) -> None:
+    """Détaille ce que le pré-filtre a écarté, et pourquoi."""
+    console.print(
+        f"{total} offre(s) à trier : [bold]{len(retenues)}[/bold] retenue(s) par le "
+        f"pré-filtre, {len(ecartees)} écartée(s) sans appel au LLM."
+    )
+    for motif, nombre in Counter(motif for _, motif in ecartees).most_common():
+        console.print(f"  - {nombre} × {motif}")
+
+
+def _drapeaux_colores(drapeaux: list[str]) -> str:
+    """Colore les drapeaux : rouge si éliminatoire, vert si valorisant."""
+    morceaux = []
+    for drapeau in drapeaux:
+        if drapeau in DRAPEAUX_ELIMINATOIRES:
+            morceaux.append(f"[red]{drapeau}[/red]")
+        elif drapeau in DRAPEAUX_BONUS:
+            morceaux.append(f"[bold green]{drapeau}[/bold green]")
+        else:
+            morceaux.append(drapeau)
+    return " ".join(morceaux)
+
+
+COULEURS_VERDICT = {"postuler": "green", "peut-etre": "yellow", "non": "dim"}
+
+
+def afficher_tri(console: Console, offres: list[dict[str, Any]]) -> None:
+    """Affiche les offres triées, meilleur score d'abord."""
+    if not offres:
+        return
+
+    table = Table(
+        title="Offres triées par score décroissant",
+        header_style="bold",
+        show_lines=True,
+        expand=True,
+    )
+    table.add_column("Score", justify="right", width=5)
+    table.add_column("Verdict", width=9)
+    table.add_column("Intitulé", max_width=32, overflow="fold")
+    table.add_column("Entreprise", max_width=18, overflow="fold")
+    table.add_column("Lieu", max_width=14, overflow="fold")
+    table.add_column("Drapeaux", max_width=20, overflow="fold")
+    table.add_column("Résumé", ratio=1, min_width=30, overflow="fold")
+
+    for offre in offres:
+        couleur = COULEURS_VERDICT.get(offre["verdict"], "")
+        style = f"[{couleur}]" if couleur else ""
+        fin = f"[/{couleur}]" if couleur else ""
+        table.add_row(
+            f"{style}{offre['score']}{fin}",
+            f"{style}{offre['verdict']}{fin}",
+            offre.get("intitule") or "",
+            offre.get("entreprise") or "",
+            offre.get("lieu") or "",
+            _drapeaux_colores(offre.get("drapeaux") or []),
+            offre.get("resume") or "",
+        )
+
+    console.print()
+    console.print(table)
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -10,6 +10,7 @@ keywords = ["emploi", "france-travail", "veille", "cli"]
 dependencies = [
     "requests>=2.32",
     "python-dotenv>=1.0",
+    "rich>=13.7",
 ]
 
 [project.scripts]

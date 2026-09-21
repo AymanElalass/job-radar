@@ -35,6 +35,7 @@ def test_config_complete(tmp_path):
         "departements": ["75", "92"],
         "publiee_depuis": 3,
         "pages_max": 2,
+        "tri": {"criteres": None, "modele": "haiku", "taille_lot": 20},
     }
 
 
@@ -100,6 +101,43 @@ def test_mots_cles_normalises_a_la_lecture(tmp_path):
     )
 
     assert charger_config(chemin)["mots_cles"] == ["alternance data"]
+
+
+def test_section_tri_lue(tmp_path):
+    chemin = ecrire_config(
+        tmp_path,
+        """
+        [recherche]
+        mots_cles = ["python"]
+
+        [tri]
+        criteres = "~/Documents/cv/criteres-tri.md"
+        modele = "sonnet"
+        taille_lot = 10
+        """,
+    )
+
+    assert charger_config(chemin)["tri"] == {
+        "criteres": "~/Documents/cv/criteres-tri.md",
+        "modele": "sonnet",
+        "taille_lot": 10,
+    }
+
+
+def test_section_tri_absente_donne_des_valeurs_par_defaut(tmp_path):
+    chemin = ecrire_config(
+        tmp_path,
+        """
+        [recherche]
+        mots_cles = ["python"]
+        """,
+    )
+
+    tri = charger_config(chemin)["tri"]
+
+    assert tri["criteres"] is None
+    assert tri["modele"] == "haiku"
+    assert tri["taille_lot"] == 20
 
 
 def test_publiee_depuis_invalide_refuse(tmp_path):

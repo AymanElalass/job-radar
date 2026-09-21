@@ -22,3 +22,15 @@ publiee_depuis = 7
 # Les offres étant triées par date de création décroissante, la première page
 # contient toujours les annonces les plus récentes.
 pages_max = 2
+
+# Étape 2 : tri des offres par LLM.
+[tri]
+# Chemin du fichier Markdown de critères, volontairement hors du dépôt
+# (il décrit votre profil). Voir criteres.example.md pour la structure.
+criteres = "~/Documents/cv/criteres-tri.md"
+
+# Modèle passé à `claude -p --model`.
+modele = "haiku"
+
+# Nombre d'offres envoyées au modèle en une fois.
+taille_lot = 20

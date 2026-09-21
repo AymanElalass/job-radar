@@ -3,10 +3,14 @@
 Outil de veille d'offres d'emploi en ligne de commande, branché sur l'API officielle
 **France Travail « Offres d'emploi v2 »**.
 
-À chaque exécution, `job-radar` interroge l'API selon les critères de `config.toml`,
-compare les résultats à un historique local et n'affiche **que les offres jamais vues**.
+`job-radar collecter` interroge l'API selon les critères de `config.toml`, compare les résultats
+à un historique local et n'affiche **que les offres jamais vues**. `job-radar trier` fait ensuite
+noter ces offres par un LLM selon vos propres critères, et n'en garde que celles qui valent
+une candidature.
 
 ## Fonctionnement
+
+### Collecte (`job-radar collecter`)
 
 1. Authentification OAuth2 (*client credentials*) auprès de France Travail. En cas de refus,
    l'outil s'arrête immédiatement plutôt que de retenter chaque recherche.
@@ -18,6 +22,23 @@ compare les résultats à un historique local et n'affiche **que les offres jama
    expérience, alternance, date de création, URL d'origine et description.
 4. Comparaison à l'historique SQLite (`data/offres.db`) : les offres déjà vues sont écartées.
 5. Affichage des nouveautés dans le terminal et écriture du détail dans `data/nouvelles.json`.
+
+### Tri (`job-radar trier`)
+
+1. **Pré-filtre en Python, gratuit** : sont écartées sans aucun appel au LLM les offres en
+   « Profession libérale » (freelance), celles qui exigent explicitement 3 ans d'expérience ou
+   plus, et les doublons de même intitulé et même entreprise. Le détail des offres écartées et
+   de leur motif est affiché.
+2. Les offres restantes partent par **lots de 20** à `claude -p --output-format json`, avec
+   seulement l'intitulé, l'entreprise, le lieu, le contrat, l'expérience et les **800 premiers
+   caractères** de la description.
+3. Le modèle renvoie, pour chaque offre, un **score sur 100**, un résumé de deux lignes, des
+   **drapeaux** et un **verdict** (`postuler`, `peut-etre`, `non`). La réponse JSON est validée ;
+   en cas de réponse inexploitable, une seule nouvelle tentative, puis le lot est signalé en
+   erreur sans bloquer les autres.
+4. Les verdicts sont stockés en SQLite : **une offre n'est jamais triée deux fois**.
+5. Affichage d'un tableau trié par score décroissant et écriture de `data/selection.json`
+   (offres `postuler` et `peut-etre`).
 
 ## Installation
 
@@ -67,11 +88,37 @@ Quelques règles utiles :
   chercher deux choses, écrivez deux entrées dans la liste. Un mot-clé invalide est refusé dès
   la lecture de `config.toml`, avant tout appel réseau.
 
+Le tri par LLM se règle dans le même fichier :
+
+```toml
+[tri]
+criteres = "~/Documents/cv/criteres-tri.md"   # fichier Markdown, hors du dépôt
+modele = "haiku"                              # modèle passé à `claude -p --model`
+taille_lot = 20                                # offres envoyées en une fois
+```
+
+### Fichier de critères
+
+Le tri s'appuie sur un fichier Markdown qui décrit votre profil, les postes visés, vos
+contraintes éliminatoires et vos bonus. Son contenu part tel quel en tête du prompt : plus il est
+précis, meilleur est le tri. Il vit **hors du dépôt** parce qu'il est personnel ;
+[`criteres.example.md`](criteres.example.md) en donne un exemple anonyme à copier :
+
+```bash
+cp criteres.example.md ~/Documents/cv/criteres-tri.md
+```
+
+Le tri suppose la CLI [Claude Code](https://claude.com/claude-code) installée et authentifiée
+(`claude`), puisque l'appel se fait via `claude -p`.
+
 ## Usage
 
 ```bash
-uv run job-radar
+uv run job-radar collecter   # ou simplement « uv run job-radar »
+uv run job-radar trier
 ```
+
+### `collecter`
 
 Options disponibles :
 
@@ -105,8 +152,63 @@ Détail complet écrit dans data/nouvelles.json
 Pour une veille quotidienne, une entrée cron suffit :
 
 ```cron
-0 8 * * * cd /chemin/vers/job-radar && uv run job-radar --silencieux
+0 8 * * * cd /chemin/vers/job-radar && uv run job-radar collecter --silencieux
 ```
+
+### `trier`
+
+| Option | Rôle |
+| --- | --- |
+| `--config CHEMIN` | autre fichier de critères (défaut `config.toml`) |
+| `--base CHEMIN` | autre base d'historique (défaut `data/offres.db`) |
+| `--sortie CHEMIN` | autre fichier JSON de sélection (défaut `data/selection.json`) |
+| `--limite N` | ne trier que les N offres les plus récentes (pour tester sans brûler de quota) |
+| `--simulation` | annoncer combien d'offres et de lots partiraient, sans rien envoyer |
+| `--modele NOM` | modèle à utiliser, au lieu de celui de `config.toml` |
+| `--importer FICHIER` | compléter l'historique avec un export JSON (bases d'avant l'étape 2) |
+
+Commencer par une simulation, qui ne coûte rien :
+
+```
+$ uv run job-radar trier --simulation
+995 offre(s) à trier : 481 retenue(s) par le pré-filtre, 514 écartée(s) sans appel au LLM.
+  - 248 × 3 ans d'expérience ou plus exigés
+  - 188 × profession libérale (freelance)
+  - 78 × doublon (même intitulé, même entreprise)
+
+Simulation : 481 offre(s) partiraient au modèle haiku en 25 lot(s) de 20 au maximum.
+Rien n'a été envoyé.
+```
+
+Puis trier pour de vrai, éventuellement par petites tranches :
+
+```
+$ uv run job-radar trier --limite 20
+20 offre(s) à trier : 13 retenue(s) par le pré-filtre, 7 écartée(s) sans appel au LLM.
+  - 4 × 3 ans d'expérience ou plus exigés
+  - 3 × profession libérale (freelance)
+
+Tri de 13 offre(s) par haiku en 1 lot(s) :
+  lot 1/1 (13 offres) → haiku…
+
+                      Offres triées par score décroissant
+┏━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━┓
+┃ Score ┃ Verdict   ┃ Intitulé                ┃ Entreprise   ┃ Lieu       ┃ Drapeaux  ┃ Résumé ┃
+┡━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━┩
+│    85 │ postuler  │ Enseignant SII (H/F)    │ RECTORAT     │ 57 -       │           │ …      │
+│    75 │ postuler  │ Chargé(e) de test H/F   │ MAISON MGA   │ 42 - Mably │ experien… │ …      │
+│    15 │ non       │ TECHNICIEN SUPPORT      │ Randstad     │ 34 -       │ telephone │ …      │
+└───────┴───────────┴─────────────────────────┴──────────────┴────────────┴───────────┴────────┘
+
+10 offre(s) retenue(s) sur 13 triée(s) → data/selection.json
+```
+
+Le verdict `postuler` s'affiche en vert, `peut-etre` en jaune, `non` en gris. Les drapeaux
+**éliminatoires** (`permis`, `telephone`, `experience`, `bac5`, `freelance`, `stage_deguise`)
+sortent en rouge, le **télétravail** (`teletravail`, `teletravail_complet`) en vert gras.
+
+Les offres déjà triées ne repartent jamais au LLM : relancer la commande ne traite que les
+nouveautés.
 
 ## Développement
 
@@ -122,15 +224,21 @@ Structure du code :
 ```
 src/job_radar/
 ├── client.py     # authentification OAuth2, recherche, réduction des offres
-├── stockage.py   # historique SQLite des offres déjà vues
-└── cli.py        # configuration, orchestration, affichage, sortie JSON
+├── stockage.py   # historique SQLite : offres vues (table offres) et triées (table tri)
+├── llm.py        # unique point de contact avec un LLM (`claude -p`)
+├── tri.py        # pré-filtre gratuit, lots, prompt, validation des réponses
+└── cli.py        # configuration, sous-commandes, affichage rich, sorties JSON
 tests/
-├── faux_reseau.py      # doublures de session HTTP et de client (aucun réseau)
+├── faux_reseau.py      # doublures de session HTTP, de client API et de LLM
 ├── test_reduction.py   # réduction des offres brutes
-├── test_nouvelles.py   # détection des offres jamais vues
-├── test_recherche.py   # tri, département optionnel, mots-clés, authentification
-└── test_config.py      # lecture de config.toml et orchestration des recherches
+├── test_nouvelles.py   # détection des offres jamais vues, stockage du tri
+├── test_recherche.py   # tri API, département optionnel, mots-clés, authentification
+├── test_config.py      # lecture de config.toml et orchestration des recherches
+├── test_tri.py         # pré-filtre, lots, prompt, validation, reprise sur erreur
+└── test_cli_tri.py     # sous-commande « trier » de bout en bout
 ```
+
+Aucun test ne fait d'appel réseau ni d'appel réel au LLM.
 
 ## Notes sur l'API
 
@@ -153,11 +261,14 @@ tests/
 
 - **Étape 1 — veille brute (faite).** Recherche multi-critères, dédoublonnage, historique SQLite,
   affichage des seules nouvelles offres et export JSON.
-- **Étape 2 — tri par LLM.** Passer `data/nouvelles.json` à `claude -p` pour noter chaque offre
-  selon un profil cible (pertinence, séniorité, stack, signaux d'alerte) et ne garder que le haut
-  du classement, avec une justification courte par offre.
-- **Étape 3 — CV ciblé.** Dans un dépôt séparé, générer à partir des offres retenues un CV et une
-  lettre adaptés à chaque annonce, à partir d'une base de contenus réutilisables.
+- **Étape 2 — tri par LLM (faite).** Pré-filtre gratuit, notation par lots via `claude -p` selon
+  un fichier de critères personnel, verdicts stockés en SQLite, tableau `rich` et
+  `data/selection.json`.
+- **Étape 3 — CV ciblé.** Dans un dépôt séparé, générer à partir de `data/selection.json` un CV
+  et une lettre adaptés à chaque annonce retenue, depuis une base de contenus réutilisables.
+
+Pistes pour la suite : remplacer `claude -p` par l'API Claude (il suffit de réécrire
+`src/job_radar/llm.py`), et rejouer le tri d'une offre quand les critères changent.
 
 ## Licence
 

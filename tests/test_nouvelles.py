@@ -83,3 +83,77 @@ def test_filtrage_sur_un_gros_lot_depassant_la_limite_de_parametres(historique):
 
     assert len(nouvelles) == 600
     assert nouvelles[0]["id"] == "ID600"
+
+
+# ---------------------------------------------------- offres à trier (étape 2)
+
+
+def test_offres_a_trier_rend_le_contenu_complet(historique):
+    historique.enregistrer([offre("A") | {"lieu": "59 - Lille", "description": "Poste"}])
+
+    (a_trier,) = historique.offres_a_trier()
+
+    assert a_trier["lieu"] == "59 - Lille"
+    assert a_trier["description"] == "Poste"
+
+
+def test_offre_deja_triee_n_est_plus_a_trier(historique):
+    historique.enregistrer([offre("A"), offre("B")])
+    historique.enregistrer_tri(
+        [{"id": "A", "score": 70, "resume": "ok", "drapeaux": [], "verdict": "postuler"}],
+        modele="haiku",
+    )
+
+    assert [o["id"] for o in historique.offres_a_trier()] == ["B"]
+    assert historique.compter_tries() == 1
+
+
+def test_limite_du_nombre_d_offres_a_trier(historique):
+    historique.enregistrer([offre(f"ID{i}") for i in range(10)])
+
+    assert len(historique.offres_a_trier(limite=3)) == 3
+
+
+def test_offres_a_trier_les_plus_recentes_d_abord(historique):
+    historique.enregistrer(
+        [
+            offre("VIEILLE") | {"date_creation": "2026-09-01T00:00:00.000Z"},
+            offre("RECENTE") | {"date_creation": "2026-09-20T00:00:00.000Z"},
+        ]
+    )
+
+    assert [o["id"] for o in historique.offres_a_trier(limite=1)] == ["RECENTE"]
+
+
+def test_enregistrer_tri_est_idempotent(historique):
+    historique.enregistrer([offre("A")])
+    resultat = {"id": "A", "score": 70, "resume": "ok", "drapeaux": ["permis"], "verdict": "non"}
+
+    historique.enregistrer_tri([resultat], modele="haiku")
+    historique.enregistrer_tri([resultat | {"score": 80}], modele="haiku")
+
+    assert historique.compter_tries() == 1
+
+
+def test_enregistrer_tri_d_une_liste_vide(historique):
+    assert historique.enregistrer_tri([], modele="haiku") == 0
+
+
+def test_offres_sans_contenu_non_triables_puis_importees(tmp_path):
+    from job_radar.stockage import Historique
+
+    chemin = tmp_path / "offres.db"
+    # Base d'avant l'étape 2 : le contenu des offres n'était pas conservé.
+    with Historique(chemin) as base:
+        base.connexion.execute(
+            "INSERT INTO offres (id, intitule, vue_le) VALUES ('A', 'Testeur', '2026-09-20')"
+        )
+        base.connexion.commit()
+        assert base.offres_a_trier() == []
+        assert base.compter_sans_contenu() == 1
+
+        complete = base.importer_contenu([offre("A") | {"lieu": "59 - Lille"}, offre("B")])
+
+        assert complete == 2
+        assert base.compter_sans_contenu() == 0
+        assert {o["id"] for o in base.offres_a_trier()} == {"A", "B"}

@@ -1,6 +1,9 @@
 # Secrets et données locales
 .env
 data/
+# Le vrai fichier de critères est personnel : seul l'exemple est versionné.
+criteres.md
+criteres-tri.md
 
 # Environnements virtuels
 .venv/
