@@ -1,0 +1,22 @@
+# Secrets et données locales
+.env
+data/
+
+# Environnements virtuels
+.venv/
+venv/
+
+# Caches et artefacts Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Système / éditeurs
+.DS_Store
+.idea/
+.vscode/

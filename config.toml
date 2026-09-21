@@ -1,0 +1,10 @@
+# Critères de veille : une recherche est lancée par couple mot-clé / département.
+[recherche]
+mots_cles = ["développeur python", "data engineer"]
+departements = ["75", "92"]
+
+# Fenêtre de publication, en jours. Valeurs acceptées par l'API : 1, 3, 7, 14, 31.
+publiee_depuis = 7
+
+# Nombre de pages de 150 offres à parcourir par recherche.
+pages_max = 1

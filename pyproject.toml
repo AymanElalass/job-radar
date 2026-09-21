@@ -1,0 +1,43 @@
+[project]
+name = "job-radar"
+version = "0.1.0"
+description = "Veille d'offres d'emploi via l'API officielle France Travail (Offres d'emploi v2)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Ayman Elalass" }]
+keywords = ["emploi", "france-travail", "veille", "cli"]
+dependencies = [
+    "requests>=2.32",
+    "python-dotenv>=1.0",
+]
+
+[project.scripts]
+job-radar = "job_radar.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/AymanElalass/job-radar"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/job_radar"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
