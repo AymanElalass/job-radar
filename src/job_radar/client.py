@@ -1,7 +1,7 @@
 """Client de l'API France Travail « Offres d'emploi v2 ».
 
-Gère l'authentification OAuth2 (client credentials), la pagination via l'en-tête
-``range`` et le respect de la limite de 10 requêtes par seconde.
+Gère l'authentification OAuth2 (client credentials), la pagination via le paramètre
+``range``, le tri par date et le respect de la limite de 10 requêtes par seconde.
 """
 
 from __future__ import annotations
@@ -25,9 +25,69 @@ DELAI_MIN_ENTRE_APPELS = 0.11
 #: Valeurs acceptées par le paramètre ``publieeDepuis`` (en jours).
 PUBLIEE_DEPUIS_VALIDES = (1, 3, 7, 14, 31)
 
+#: Valeur du paramètre ``sort`` : tri par date de création décroissante, puis pertinence
+#: décroissante, puis distance croissante (0 = pertinence d'abord, 2 = distance d'abord).
+SORT_DATE_DECROISSANTE = 1
+
+#: Longueur minimale d'un mot-clé imposée par l'API : « chaque mot clé ou expression
+#: comprend au moins 2 caractères ».
+LONGUEUR_MIN_MOT_CLE = 2
+
+#: Caractères non alphanumériques documentés comme acceptés dans ``motsCles``.
+#: L'espace en fait partie : une expression de plusieurs mots est donc un mot-clé valide.
+#: L'apostrophe et le tiret, courants en français, y sont ajoutés par tolérance.
+CARACTERES_AUTORISES_MOT_CLE = " @#$%^&+./-\"'\u2019"
+
 
 class ErreurFranceTravail(RuntimeError):
     """Erreur renvoyée par l'API ou par le service d'authentification."""
+
+
+class ErreurAuthentification(ErreurFranceTravail):
+    """Le service d'authentification a refusé les identifiants.
+
+    Erreur fatale : sans jeton, aucune recherche ne peut aboutir. Elle n'est donc
+    jamais rattrapée pour être réessayée recherche par recherche.
+    """
+
+
+class ErreurRecherche(ErreurFranceTravail):
+    """Une recherche précise a échoué ; les autres peuvent encore aboutir."""
+
+
+def normaliser_mot_cle(mot: str) -> str:
+    """Normalise un mot-clé et vérifie qu'il est exploitable par l'API.
+
+    Une expression de plusieurs mots (« alternance data ») est parfaitement valide :
+    l'espace fait partie des caractères autorisés et l'API traite l'expression comme
+    un seul mot-clé. La virgule, elle, sert de séparateur entre mots-clés côté API :
+    la laisser passer lancerait une recherche différente de celle demandée, elle est
+    donc refusée au profit de deux entrées distinctes dans la configuration.
+    """
+    normalise = " ".join(mot.split())
+
+    if len(normalise) < LONGUEUR_MIN_MOT_CLE:
+        raise ValueError(
+            f"mot-clé {mot!r} trop court : l'API en exige au moins "
+            f"{LONGUEUR_MIN_MOT_CLE} caractères"
+        )
+    if "," in normalise:
+        raise ValueError(
+            f"mot-clé {mot!r} : la virgule sépare les mots-clés côté API ; "
+            "utilisez plutôt une entrée par mot-clé dans la configuration"
+        )
+
+    interdits = sorted(
+        {
+            caractere
+            for caractere in normalise
+            if not caractere.isalnum() and caractere not in CARACTERES_AUTORISES_MOT_CLE
+        }
+    )
+    if interdits:
+        raise ValueError(f"mot-clé {mot!r} : caractère(s) non autorisé(s) par l'API {interdits}")
+
+    return normalise
 
 
 def reduire_offre(offre: dict[str, Any]) -> dict[str, Any]:
@@ -112,8 +172,9 @@ class ClientFranceTravail:
             timeout=self.timeout,
         )
         if reponse.status_code != 200:
-            raise ErreurFranceTravail(
-                f"Échec de l'authentification ({reponse.status_code}) : {reponse.text[:200]}"
+            raise ErreurAuthentification(
+                f"authentification refusée par France Travail ({reponse.status_code}) : "
+                f"{reponse.text[:200]}"
             )
 
         charge = reponse.json()
@@ -133,13 +194,15 @@ class ClientFranceTravail:
     def rechercher(
         self,
         mots_cles: str,
-        departement: str,
+        departement: str | None = None,
         publiee_depuis: int = 7,
         page: int = 0,
     ) -> list[dict[str, Any]]:
-        """Renvoie les offres brutes d'une page de résultats.
+        """Renvoie les offres brutes d'une page de résultats, les plus récentes d'abord.
 
-        Les statuts 200 et 206 contiennent des résultats, 204 signifie « aucune offre ».
+        ``departement`` à ``None`` omet le paramètre : la recherche porte alors sur
+        toute la France. Les statuts 200 et 206 contiennent des résultats, 204 signifie
+        « aucune offre ».
         """
         if publiee_depuis not in PUBLIEE_DEPUIS_VALIDES:
             raise ValueError(
@@ -147,15 +210,21 @@ class ClientFranceTravail:
                 f"reçu {publiee_depuis!r}"
             )
 
+        parametres: dict[str, Any] = {
+            "motsCles": normaliser_mot_cle(mots_cles),
+            "publieeDepuis": publiee_depuis,
+            "range": construire_range(page),
+            # Sans tri explicite, l'API classe par pertinence : la pagination ne
+            # ramènerait pas forcément les offres les plus récentes.
+            "sort": SORT_DATE_DECROISSANTE,
+        }
+        if departement is not None:
+            parametres["departement"] = departement
+
         self._attendre_quota()
         reponse = self.session.get(
             URL_RECHERCHE,
-            params={
-                "motsCles": mots_cles,
-                "departement": departement,
-                "publieeDepuis": publiee_depuis,
-                "range": construire_range(page),
-            },
+            params=parametres,
             headers={
                 "Authorization": f"Bearer {self._token_valide()}",
                 "Accept": "application/json",
@@ -166,9 +235,10 @@ class ClientFranceTravail:
         if reponse.status_code == 204:
             return []
         if reponse.status_code not in (200, 206):
-            raise ErreurFranceTravail(
-                f"Recherche en échec ({reponse.status_code}) pour "
-                f"{mots_cles!r}/{departement} : {reponse.text[:200]}"
+            zone = f"dép. {departement}" if departement is not None else "France entière"
+            raise ErreurRecherche(
+                f"recherche en échec ({reponse.status_code}) pour {mots_cles!r} / "
+                f"{zone} : {reponse.text[:200]}"
             )
 
         return reponse.json().get("resultats") or []

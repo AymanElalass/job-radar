@@ -16,7 +16,9 @@ from job_radar.client import (
     PUBLIEE_DEPUIS_VALIDES,
     TAILLE_PAGE,
     ClientFranceTravail,
-    ErreurFranceTravail,
+    ErreurAuthentification,
+    ErreurRecherche,
+    normaliser_mot_cle,
     reduire_offre,
 )
 from job_radar.stockage import CHEMIN_BASE_DEFAUT, Historique
@@ -39,13 +41,19 @@ def charger_config(chemin: str | Path = CHEMIN_CONFIG_DEFAUT) -> dict[str, Any]:
         brut = tomllib.load(fichier)
 
     recherche = brut.get("recherche", brut)
-    mots_cles = recherche.get("mots_cles") or []
+    mots_cles_brut = recherche.get("mots_cles") or []
+    # Une liste de départements vide est volontaire : la recherche porte alors sur
+    # toute la France, avec une seule requête par mot-clé.
     departements = recherche.get("departements") or []
-    if not mots_cles or not departements:
+    if not mots_cles_brut:
         raise ErreurConfiguration(
-            f"{chemin} doit définir au moins un mot-clé et un département "
-            "dans la section [recherche]."
+            f"{chemin} doit définir au moins un mot-clé dans la section [recherche]."
         )
+
+    try:
+        mots_cles = [normaliser_mot_cle(str(mot)) for mot in mots_cles_brut]
+    except ValueError as erreur:
+        raise ErreurConfiguration(f"{chemin} : {erreur}") from erreur
 
     publiee_depuis = int(recherche.get("publiee_depuis", 7))
     if publiee_depuis not in PUBLIEE_DEPUIS_VALIDES:
@@ -54,7 +62,7 @@ def charger_config(chemin: str | Path = CHEMIN_CONFIG_DEFAUT) -> dict[str, Any]:
         )
 
     return {
-        "mots_cles": [str(mot) for mot in mots_cles],
+        "mots_cles": mots_cles,
         "departements": [str(dept) for dept in departements],
         "publiee_depuis": publiee_depuis,
         "pages_max": max(1, int(recherche.get("pages_max", 1))),
@@ -79,11 +87,18 @@ def collecter(
     config: dict[str, Any],
     bavard: bool = True,
 ) -> list[dict[str, Any]]:
-    """Lance une recherche par couple mot-clé / département et dédoublonne par identifiant."""
+    """Lance une recherche par couple mot-clé / département et dédoublonne par identifiant.
+
+    Sans département configuré, une seule recherche par mot-clé est lancée sur toute
+    la France. Une recherche en échec est signalée sans interrompre les suivantes ;
+    un refus d'authentification, lui, remonte immédiatement (`ErreurAuthentification`).
+    """
     offres: dict[str, dict[str, Any]] = {}
+    # `None` = pas de filtre géographique, donc une requête pour toute la France.
+    zones: list[str | None] = list(config["departements"]) or [None]
 
     for mot in config["mots_cles"]:
-        for departement in config["departements"]:
+        for departement in zones:
             for page in range(config["pages_max"]):
                 try:
                     resultats = client.rechercher(
@@ -92,15 +107,13 @@ def collecter(
                         publiee_depuis=config["publiee_depuis"],
                         page=page,
                     )
-                except ErreurFranceTravail as erreur:
+                except ErreurRecherche as erreur:
                     print(f"  ! {erreur}", file=sys.stderr)
                     break
 
                 if bavard:
-                    print(
-                        f"  {mot!r} / dép. {departement} / page {page + 1} : "
-                        f"{len(resultats)} offres"
-                    )
+                    zone = f"dép. {departement}" if departement else "France entière"
+                    print(f"  {mot!r} / {zone} / page {page + 1} : {len(resultats)} offres")
 
                 for brute in resultats:
                     offre = reduire_offre(brute)
@@ -186,18 +199,28 @@ def main(argv: list[str] | None = None) -> int:
 
     bavard = not args.silencieux
     if bavard:
+        zone = (
+            f"{len(config['departements'])} département(s)"
+            if config["departements"]
+            else "France entière"
+        )
         print(
-            f"Recherche : {len(config['mots_cles'])} mot(s)-clé × "
-            f"{len(config['departements'])} département(s), "
-            f"publiées depuis {config['publiee_depuis']} jour(s)"
+            f"Recherche : {len(config['mots_cles'])} mot(s)-clé × {zone}, "
+            f"offres publiées depuis {config['publiee_depuis']} jour(s), "
+            "triées par date de création décroissante"
         )
 
     client = ClientFranceTravail(client_id, client_secret)
     try:
         offres = collecter(client, config, bavard=bavard)
-    except ErreurFranceTravail as erreur:
-        print(f"Erreur : {erreur}", file=sys.stderr)
-        return 1
+    except ErreurAuthentification as erreur:
+        # Inutile de poursuivre : aucune recherche ne peut aboutir sans jeton valide.
+        print(
+            f"Erreur : {erreur}\nVérifiez FT_CLIENT_ID et FT_CLIENT_SECRET dans .env, "
+            "ainsi que la souscription de votre application à l'API Offres d'emploi v2.",
+            file=sys.stderr,
+        )
+        return 3
 
     with Historique(args.base) as historique:
         nouvelles = historique.filtrer_nouvelles(offres)
