@@ -227,3 +227,69 @@ def test_offres_triees_ignore_les_offres_sans_contenu(tmp_path):
         )
 
         assert base.offres_triees() == []
+
+
+# ------------------------------- actualisation des offres déjà connues
+
+
+def test_actualiser_rafraichit_le_contenu(historique):
+    historique.enregistrer([offre("A")])
+
+    change = historique.actualiser([offre("A") | {"rome": "M1805", "intitule": "Testeur QA"}])
+
+    (a_trier,) = historique.offres_a_trier()
+    assert change == 1
+    assert a_trier["rome"] == "M1805"
+    assert a_trier["intitule"] == "Testeur QA"
+
+
+def test_actualiser_conserve_la_date_de_premiere_vue(historique):
+    historique.enregistrer([offre("A")])
+    vue_le = historique.connexion.execute("SELECT vue_le FROM offres WHERE id = 'A'").fetchone()[0]
+
+    historique.actualiser([offre("A") | {"rome": "M1805"}])
+
+    assert (
+        historique.connexion.execute("SELECT vue_le FROM offres WHERE id = 'A'").fetchone()[0]
+        == vue_le
+    )
+    # L'offre ne redevient pas nouvelle.
+    assert historique.filtrer_nouvelles([offre("A")]) == []
+
+
+def test_actualiser_ne_touche_pas_au_statut_de_tri(historique):
+    historique.enregistrer([offre("A")])
+    historique.enregistrer_tri(
+        [{"id": "A", "score": 70, "resume": "ok", "drapeaux": [], "verdict": "postuler"}],
+        modele="sonnet",
+    )
+
+    historique.actualiser([offre("A") | {"rome": "M1805"}])
+
+    assert historique.compter_tries() == 1
+    assert historique.offres_a_trier() == []
+    (triee,) = historique.offres_triees()
+    assert triee["verdict"] == "postuler"
+    # Le contenu rafraîchi est bien celui qui ressort.
+    assert triee["rome"] == "M1805"
+
+
+def test_actualiser_ignore_les_offres_inconnues(historique):
+    historique.enregistrer([offre("A")])
+
+    change = historique.actualiser([offre("B", "Autre poste")])
+
+    assert change == 0
+    assert historique.compter() == 1
+
+
+def test_actualiser_ne_compte_que_les_changements_reels(historique):
+    historique.enregistrer([offre("A")])
+
+    assert historique.actualiser([offre("A")]) == 0
+    assert historique.actualiser([offre("A") | {"rome": "M1805"}]) == 1
+    assert historique.actualiser([offre("A") | {"rome": "M1805"}]) == 0
+
+
+def test_actualiser_une_liste_vide(historique):
+    assert historique.actualiser([]) == 0

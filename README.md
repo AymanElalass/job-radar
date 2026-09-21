@@ -21,6 +21,8 @@ une candidature.
 3. Réduction de chaque offre aux champs utiles : intitulé, lieu, entreprise, contrat, salaire,
    expérience, alternance, date de création, URL d'origine et description.
 4. Comparaison à l'historique SQLite (`data/offres.db`) : les offres déjà vues sont écartées.
+   Leur contenu est tout de même **rafraîchi** — un champ ajouté depuis leur collecte, comme le
+   code ROME, est récupéré — sans toucher à leur date de première vue ni à leur statut de tri.
 5. Affichage des nouveautés dans le terminal et écriture du détail dans `data/nouvelles.json`.
 
 ### Tri (`job-radar trier`)
@@ -45,22 +47,31 @@ une candidature.
    L'intitulé est normalisé sans accents, sans casse, sans `(H/F)` ni ponctuation ; la ville
    sans le préfixe de département de l'API (`59 - Lille` → `lille`).
 
-   Plusieurs **drapeaux sont posés en Python**, sans LLM, parce qu'ils sont vérifiables
-   mécaniquement — ils s'ajoutent à ceux du modèle, qui attrape les formulations non couvertes :
-   - **`rqth`** : entreprise contenant « Talents Handicap » ou URL sur `handicap-job.com`.
-     Avec `exclure_rqth = true`, ces offres sont écartées ; sinon elles portent le drapeau.
-   - **`permis`** : « permis B obligatoire / exigé / nécessaire ». Les tournures qui le rendent
+   Trois **exigences fermées** sont lues en Python et écartent l'offre, sans la faire noter :
+   - **permis** : « permis B obligatoire / exigé / nécessaire ». Les tournures qui le rendent
      facultatif l'emportent, et `permis/certification` — une rubrique des annonces agrégées —
      est ignoré : l'exigence qui suit porte sur la certification.
-   - **`bac5`** : bac+5, master 2, mastère, école ou diplôme d'ingénieur, doctorat, à condition
-     qu'une exigence accompagne le diplôme. Une fourchette (`bac+3 à bac+5`) ou une énumération
-     de niveaux proposés (`bac, bac+2, bachelor/bac+3 ou mastère/bac+5`, typique des offres
-     d'alternance) n'est pas une exigence.
+   - **bac+5** : bac+5, master 2, mastère, école ou diplôme d'ingénieur, doctorat, à condition
+     qu'une exigence accompagne le diplôme. Ne comptent **pas** comme exigence les fourchettes
+     qui acceptent une licence — `Bac+3/5`, `Bac+3 à Bac+5`, `Bac+3 ou Bac+5`, `Bac+2 à Bac+5`,
+     `Bac+3/Bac+5` — ni les énumérations de niveaux proposés (`bac, bac+2, bachelor/bac+3 ou
+     mastère/bac+5`, typiques des offres d'alternance).
+   - **expérience** : voir plus bas.
+
+   Un seul **drapeau est encore posé en Python** : **`rqth`**, quand l'entreprise contient
+   « Talents Handicap » ou que l'URL est sur `handicap-job.com`. Avec `exclure_rqth = true`, ces
+   offres sont écartées ; sinon elles portent le drapeau. Le modèle reste libre de poser
+   `permis`, `bac5` et `experience` sur des formulations que ces règles ne couvrent pas — la
+   règle de verdict s'applique alors.
    L'**expérience** est lue à deux endroits, et une durée de 3 ans ou plus écarte l'offre : le
-   libellé de l'API (`3 An(s)`) et la **description entière** — « X ans minimum », « minimum
-   X ans », « au moins X ans ». Beaucoup d'annonces affichent « débutant accepté » puis
-   réclament cinq ans mille caractères plus loin ; la troncature à 800 caractères ne concerne
-   que l'extrait envoyé au modèle, pas ces règles.
+   libellé de l'API (`3 An(s)`) et la **description entière**. Les tournures couvertes :
+   « X ans minimum », « minimum X ans », « au moins X ans », « a minima X ans », « environ
+   X ans », « environ X à Y ans », « X ans d'expérience », « X années d'expérience »,
+   « X ans ou plus », « X à Y ans minimum », et « au moins X/Y » sans le mot « ans ». Une
+   fourchette compte par sa borne basse, et « 5 ans appréciés / seraient un atout » n'est pas
+   une exigence. Beaucoup d'annonces affichent « débutant accepté » puis réclament cinq ans
+   mille caractères plus loin ; la troncature à 800 caractères ne concerne que l'extrait envoyé
+   au modèle, pas ces règles.
    - **stage** : le mot « stage » ou « stagiaire » dans l'intitulé ou l'URL, ou une tournure
      de la description qui désigne l'offre elle-même (« en tant que stagiaire », « offre de
      stage », « le stagiaire sera… »). Le mot seul dans la description ne suffit pas : un poste

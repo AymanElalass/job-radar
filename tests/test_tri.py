@@ -15,9 +15,11 @@ from job_radar.tri import (
     DRAPEAUX_REDHIBITOIRES,
     DRAPEAUX_VALIDES,
     LONGUEUR_DESCRIPTION,
+    MOTIF_BAC5,
     MOTIF_DOUBLON,
     MOTIF_EXPERIENCE,
     MOTIF_LIBERALE,
+    MOTIF_PERMIS,
     MOTIF_ROME,
     MOTIF_RQTH,
     MOTIF_STAGE,
@@ -896,14 +898,10 @@ def test_doublon_meme_entreprise_autre_ville():
 # ------------------------------------------- drapeaux déterministes et verdict
 
 
-def test_drapeaux_deterministes_cumules():
-    complete = offre(
-        "A",
-        entreprise="Forums Talents Handicap",
-        description="Permis B obligatoire. Formation bac+5 exigée.",
-    )
+def test_drapeau_rqth_pose_sans_llm():
+    rqth = offre("A", entreprise="Forums Talents Handicap")
 
-    assert drapeaux_deterministes(complete) == ["rqth", "permis", "bac5"]
+    assert drapeaux_deterministes(rqth) == ["rqth"]
 
 
 def test_aucun_drapeau_deterministe_sur_une_offre_neutre():
@@ -911,14 +909,14 @@ def test_aucun_drapeau_deterministe_sur_une_offre_neutre():
 
 
 def test_drapeaux_du_modele_et_de_python_se_cumulent():
-    lot = [offre("A", description="Permis B obligatoire.")]
+    lot = [offre("A", entreprise="Forums Talents Handicap")]
     resultats = [
         {"id": "A", "score": 60, "resume": "", "drapeaux": ["teletravail"], "verdict": "peut-etre"}
     ]
 
     (enrichi,) = ajouter_drapeaux_deterministes(lot, resultats)
 
-    assert enrichi["drapeaux"] == ["teletravail", "permis"]
+    assert enrichi["drapeaux"] == ["teletravail", "rqth"]
 
 
 @pytest.mark.parametrize("drapeau", ["permis", "telephone", "bac5", "freelance"])
@@ -944,16 +942,24 @@ def test_verdict_conserve_sans_drapeau_redhibitoire(drapeaux):
 
 
 def test_regle_de_verdict_appliquee_par_le_tri_d_un_lot():
+    # Un permis repéré par le modèle, sur une formulation que Python ne couvre pas :
+    # les offres où Python le voit sont écartées avant d'arriver ici.
     client = FauxLLM(
         reponses=[
-            reponse({"id": "A", "score": 90, "resume": "ok", "drapeaux": [], "verdict": "postuler"})
+            reponse(
+                {
+                    "id": "A",
+                    "score": 90,
+                    "resume": "ok",
+                    "drapeaux": ["permis"],
+                    "verdict": "postuler",
+                }
+            )
         ]
     )
-    lot = [offre("A", description="Le permis B est obligatoire pour ce poste.")]
 
-    (resultat,) = trier_lot(client, CRITERES, lot)
+    (resultat,) = trier_lot(client, CRITERES, [offre("A")])
 
-    assert resultat["drapeaux"] == ["permis"]
     assert resultat["verdict"] == "non"
     assert resultat["score"] == 90
 
@@ -1128,3 +1134,112 @@ def test_experience_n_est_plus_un_drapeau_deterministe():
     assert drapeaux_deterministes(offre("A", description="5 ans minimum exigés.")) == []
     # Le modèle reste libre de poser le drapeau sur d'autres formulations.
     assert "experience" in DRAPEAUX_LLM
+
+
+# ------------------------------------- tournures d'expérience, une par tournure
+
+
+@pytest.mark.parametrize(
+    ("tournure", "description"),
+    [
+        ("X ans minimum", "5 ans minimum sur stack Java + React.js."),
+        ("minimum X ans", "Minimum 5 ans sur stack Java."),
+        ("au moins X ans", "Au moins 5 ans d'expérience en développement."),
+        ("a minima X ans", "A minima 3 ans sur un poste similaire."),
+        ("environ X ans", "Profil avec environ 5 ans d'expérience."),
+        ("environ X à Y ans", "Avec environ 8 à 10 ans d'expérience."),
+        ("X ans d'expérience", "Vous disposez de 4 ans d'expérience en architecture Java."),
+        ("X années d'expérience", "5 années d'expérience requises."),
+        ("X ans d'exp.", "Poste confirmé : 6 ans d'exp. sur le périmètre."),
+        ("X ans ou plus", "Expérience de 5 ans ou plus en développement."),
+        ("X ans et plus", "Expérience de 3 ans et plus exigée."),
+        ("au moins X/Y sans « ans »", "Au moins 7/8 d'expérience sera demandé."),
+        ("minimum X/Y sans « ans »", "Minimum 4/5 d'expérience sur le poste."),
+        ("X à Y ans minimum", "Expérience : 3 à 5 ans minimum en support N2."),
+        ("séniorité requise X à Y ans", "Séniorité requise : 8 à 10 ans d'expérience."),
+    ],
+)
+def test_tournure_d_experience_reconnue(tournure, description):
+    assert exige_experience_dans_le_texte(offre("A", description=description)) is True, tournure
+
+
+@pytest.mark.parametrize(
+    ("raison", "description"),
+    [
+        ("sous le seuil", "2 ans d'expérience suffisent."),
+        ("un seul an", "1 an minimum."),
+        ("environ sous le seuil", "Environ 2 ans d'expérience."),
+        ("débutant", "Débutant accepté, aucune expérience requise."),
+        ("souhaitée, pas exigée", "Une expérience de 5 ans serait un atout."),
+        ("appréciée", "5 ans d'expérience appréciés."),
+        ("sans durée", "Un minimum de rigueur est attendu."),
+        ("durée sans rapport", "Mission de 12 mois renouvelable."),
+    ],
+)
+def test_tournure_d_experience_ecartee(raison, description):
+    assert exige_experience_dans_le_texte(offre("A", description=description)) is False, raison
+
+
+# ------------------------ bac+3/bac+5 : ces annonces acceptent une licence
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        "Bac+3/5 en informatique",
+        "Bac+3 à Bac+5",
+        "Bac+3 ou Bac+5",
+        "Bac+2 à Bac+5",
+        "Formation Bac+3/Bac+5 exigée",
+        "Bac+3 - Bac+5 exigé",
+        "De niveau Bac+3 à Bac+5 exigé",
+        "bac +3 / +5 en informatique",
+        "Diplôme Bac+2/Bac+5 accepté",
+        "Profil bac+3 à bac+5 en informatique.",
+    ],
+)
+def test_fourchette_de_diplome_accepte_une_licence(description):
+    assert exige_bac5(offre("A", description=description)) is False
+
+
+# --------------------------------- permis et bac+5 écartés au pré-filtre
+
+
+def test_permis_ecarte_au_prefiltre():
+    permis = offre(
+        "B",
+        intitule="Technicien support de proximité",
+        description="Un permis B valide est obligatoire pour ce poste.",
+    )
+
+    retenues, ecartees = prefiltrer([offre("A"), permis])
+
+    assert [o["id"] for o in retenues] == ["A"]
+    assert ecartees == [(permis, MOTIF_PERMIS)]
+
+
+def test_bac5_ecarte_au_prefiltre():
+    bac5 = offre("B", intitule="Data Engineer", description="Formation bac+5 exigée.")
+
+    retenues, ecartees = prefiltrer([offre("A"), bac5])
+
+    assert [o["id"] for o in retenues] == ["A"]
+    assert ecartees == [(bac5, MOTIF_BAC5)]
+
+
+def test_licence_acceptee_reste_retenue():
+    licence = offre("B", intitule="Développeur", description="Formation Bac+3 à Bac+5.")
+
+    retenues, _ = prefiltrer([offre("A"), licence])
+
+    assert [o["id"] for o in retenues] == ["A", "B"]
+
+
+def test_rqth_reste_le_seul_drapeau_deterministe():
+    # permis, bac5 et experience écartent l'offre : ils n'ont plus à être signalés.
+    assert DRAPEAUX_DETERMINISTES == ("rqth",)
+    retenue = offre("A", description="Permis B obligatoire. Formation bac+5 exigée.")
+    assert drapeaux_deterministes(retenue) == []
+    # Le modèle garde la main sur ces drapeaux, et la règle de verdict s'applique.
+    for drapeau in ("permis", "bac5", "experience"):
+        assert drapeau in DRAPEAUX_LLM

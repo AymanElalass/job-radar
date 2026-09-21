@@ -134,6 +134,39 @@ class Historique:
         self.connexion.commit()
         return curseur.rowcount
 
+    def actualiser(self, offres: Iterable[dict[str, Any]]) -> int:
+        """Rafraîchit le contenu des offres déjà connues. Renvoie le nombre de lignes changées.
+
+        Sert à récupérer les champs ajoutés après coup — le code ROME, par exemple — sur
+        des offres collectées avant. La date de première vue et la table ``tri`` ne sont
+        pas touchées : une offre déjà vue ne redevient pas nouvelle, une offre déjà triée
+        reste triée. Les identifiants inconnus sont ignorés, c'est à
+        :meth:`enregistrer` de les insérer.
+        """
+        lignes = []
+        for offre in offres:
+            donnees = json.dumps(offre, ensure_ascii=False)
+            lignes.append(
+                (
+                    offre.get("intitule"),
+                    offre.get("entreprise"),
+                    offre.get("date_creation"),
+                    donnees,
+                    offre["id"],
+                    donnees,
+                )
+            )
+        if not lignes:
+            return 0
+
+        curseur = self.connexion.executemany(
+            "UPDATE offres SET intitule = ?, entreprise = ?, date_creation = ?, donnees = ? "
+            "WHERE id = ? AND (donnees IS NULL OR donnees <> ?)",
+            lignes,
+        )
+        self.connexion.commit()
+        return curseur.rowcount
+
     def importer_contenu(self, offres: Iterable[dict[str, Any]]) -> int:
         """Complète le contenu des offres déjà connues mais stockées sans leurs données.
 

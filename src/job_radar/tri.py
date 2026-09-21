@@ -51,13 +51,12 @@ DRAPEAUX_LLM = (
 )
 
 #: Drapeaux posés par Python, sans LLM, parce qu'ils sont vérifiables mécaniquement.
-#: Le LLM peut poser les mêmes (sauf ``rqth``) sur des formulations que ces règles
-#: ne couvrent pas : les deux sources s'additionnent.
 #:
-#: ``experience`` n'y figure pas : une durée minimale chiffrée dans la description
-#: écarte l'offre au pré-filtre (voir :func:`exige_experience_dans_le_texte`), elle
-#: n'a donc pas à être signalée sur une offre retenue.
-DRAPEAUX_DETERMINISTES = ("rqth", "permis", "bac5")
+#: ``rqth`` est le seul qui reste : ``permis``, ``bac5`` et ``experience`` écartent
+#: désormais l'offre au pré-filtre, ils n'ont donc plus à être signalés sur une offre
+#: retenue. Le LLM peut toujours les poser sur des formulations que ces règles ne
+#: couvrent pas, et la règle de verdict s'applique alors.
+DRAPEAUX_DETERMINISTES = ("rqth",)
 
 #: Tous les drapeaux acceptés, d'où qu'ils viennent.
 DRAPEAUX_VALIDES = (*DRAPEAUX_LLM, *DRAPEAUX_DETERMINISTES)
@@ -85,6 +84,8 @@ MOTIF_ROME = "hors des codes ROME retenus"
 MOTIF_TJM = "rémunéré au jour (TJM, freelance)"
 MOTIF_EXPERIENCE = f"{SEUIL_EXPERIENCE_ANNEES} ans d'expérience ou plus exigés"
 MOTIF_STAGE = "stage (convention impossible, diplôme déjà obtenu)"
+MOTIF_PERMIS = "permis de conduire exigé"
+MOTIF_BAC5 = "bac+5 ou diplôme d'ingénieur exigé"
 MOTIF_RQTH = "offre réservée aux travailleurs handicapés (exclure_rqth)"
 MOTIF_DOUBLON = "doublon (même intitulé, même entreprise ou même ville)"
 
@@ -244,6 +245,8 @@ REGEX_BAC5 = re.compile(
 REGEX_FOURCHETTE_DIPLOME = re.compile(
     r"\bbac\b\s*(\+\s*[0-4])?\s*(a|au|jusqu.a|et)\s*bac\s*\+\s*[5-8]"
     r"|\bbac\s*\+\s*[0-4]\s*(a|au|jusqu.a|et|/|-)\s*(\+\s*)?[5-8]\b"
+    # « bac+3/bac+5 », « bac+3 - bac+5 » : « bac » répété de part et d'autre.
+    r"|\bbac\s*\+\s*[0-4]\s*[/-]\s*bac\s*\+\s*[5-8]\b"
     # Énumération de niveaux proposés (catalogue d'école, offres d'alternance) :
     # « de niveau 4 à niveau 7 (bac, bac+2, bachelor/bac+3 ou mastère/bac+5) ».
     r"|\b(bac\s*\+\s*[0-3]|bachelor)\b[^.;!?]{0,40}\b(ou|et)\b\s*"
@@ -257,10 +260,28 @@ REGEX_EXIGENCE_DIPLOME = re.compile(
     r"de formation|formation|niveau|diplome)\b"
 )
 
-#: « 3 ans minimum », « minimum 5 ans », « au moins 4 ans d'expérience ».
+#: Durées d'expérience exigées, dans toutes les tournures rencontrées sur les
+#: annonces réelles. Chaque branche capture la borne basse de la durée : c'est elle
+#: que le candidat doit atteindre. Les groupes sont lus par :func:`_premiere_annee`,
+#: qui prend le premier groupe renseigné — inutile de compter les parenthèses.
 REGEX_ANNEES_MINIMUM = re.compile(
+    # « 3 ans minimum », « 3 à 5 ans minimum », « (5 ans minimum) »
     r"(\d+)\s*(?:a\s*\d+\s*)?ans?\b[^.;!?]{0,30}\b(?:minimum|mini|au minimum)\b"
+    # « minimum 5 ans », « au moins 4 ans », « a minima 3 ans »
     r"|\b(?:minimum|au moins|a minima)\b\D{0,15}?(\d+)\s*ans?\b"
+    # « environ 5 ans », « environ 5 a 7 ans »
+    r"|\benviron\s*(\d+)\s*(?:a\s*\d+\s*)?ans?\b"
+    # « 5 ans d'experience », « 5 ans d'exp. », « 5 annees d'experience »
+    r"|(\d+)\s*(?:a\s*\d+\s*)?an(?:s|nees?)?\s*(?:et plus\s*)?d.exp\w*"
+    # « au moins 7/8 d'experience », « minimum 5/6 ans » — la durée sans le mot « ans »
+    r"|\b(?:minimum|au moins|a minima|environ)\s*(\d+)\s*/\s*\d+\b"
+    # « experience de 5 ans et plus », « 5 ans ou plus »
+    r"|(\d+)\s*ans?\s*(?:ou|et)\s*plus\b"
+)
+
+#: Tournures qui rendent la durée souhaitable plutôt qu'exigée : on ne les compte pas.
+REGEX_EXPERIENCE_FACULTATIVE = re.compile(
+    r"\b(apprecie|souhaite|un plus|bienvenu|serait un atout|atout)\w*\b"
 )
 
 #: Rémunération à la journée : marque une mission d'indépendant.
@@ -319,10 +340,23 @@ def exige_experience_dans_le_texte(offre: dict[str, Any]) -> bool:
     texte = _texte_offre(offre, "description")
 
     for correspondance in REGEX_ANNEES_MINIMUM.finditer(texte):
-        annees = correspondance.group(1) or correspondance.group(2)
-        if annees and int(annees) >= SEUIL_EXPERIENCE_ANNEES:
-            return True
+        annees = _premiere_annee(correspondance)
+        if annees is None or annees < SEUIL_EXPERIENCE_ANNEES:
+            continue
+        # « 5 ans d'expérience appréciés » n'est pas une exigence.
+        phrase = texte[correspondance.start() : correspondance.end() + 40]
+        if REGEX_EXPERIENCE_FACULTATIVE.search(phrase):
+            continue
+        return True
     return False
+
+
+def _premiere_annee(correspondance: re.Match[str]) -> int | None:
+    """Renvoie le premier groupe chiffré renseigné d'une correspondance."""
+    for groupe in correspondance.groups():
+        if groupe:
+            return int(groupe)
+    return None
 
 
 def est_remunere_au_jour(offre: dict[str, Any]) -> bool:
@@ -332,11 +366,7 @@ def est_remunere_au_jour(offre: dict[str, Any]) -> bool:
 
 def drapeaux_deterministes(offre: dict[str, Any]) -> list[str]:
     """Drapeaux que Python pose seul, dans l'ordre de :data:`DRAPEAUX_DETERMINISTES`."""
-    detections = {
-        "rqth": est_rqth,
-        "permis": exige_permis,
-        "bac5": exige_bac5,
-    }
+    detections = {"rqth": est_rqth}
     return [drapeau for drapeau in DRAPEAUX_DETERMINISTES if detections[drapeau](offre)]
 
 
@@ -394,6 +424,10 @@ def prefiltrer(
 
     ``codes_rome`` restreint la veille à des familles de métiers (voir
     :func:`code_rome_retenu`).
+
+    Les exigences que Python sait lire — permis, bac+5, durée d'expérience — écartent
+    l'offre ici plutôt que de la faire noter puis recaler par la règle de verdict :
+    autant ne pas la payer.
     """
     retenues: list[dict[str, Any]] = []
     ecartees: list[tuple[dict[str, Any], str]] = []
@@ -416,6 +450,12 @@ def prefiltrer(
             continue
         if est_remunere_au_jour(offre):
             ecartees.append((offre, MOTIF_TJM))
+            continue
+        if exige_permis(offre):
+            ecartees.append((offre, MOTIF_PERMIS))
+            continue
+        if exige_bac5(offre):
+            ecartees.append((offre, MOTIF_BAC5))
             continue
         if exclure_rqth and est_rqth(offre):
             ecartees.append((offre, MOTIF_RQTH))

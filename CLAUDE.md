@@ -41,6 +41,10 @@ ce fichier. Aucun autre module n'importe `subprocess`.
   l'API (`exige_experience_longue`) **et** description entière (`exige_experience_dans_le_texte`,
   car l'exigence arrive souvent bien après les 800 caractères envoyés au modèle) —, offres RQTH
   si `exclure_rqth`, doublons. Le nombre d'offres écartées et leur motif sont toujours affichés.
+- **Une collecte rafraîchit les offres connues** (`Historique.actualiser`) : le contenu réduit
+  est réécrit quand il a changé, mais ni `vue_le` ni la table `tri` ne bougent. C'est ce qui
+  permet à un champ ajouté après coup (le code ROME) de remonter sur des offres déjà collectées
+  sans les faire retrier ni réapparaître comme nouvelles.
 - **Un champ non conservé par `reduire_offre` ne peut pas être filtré** : le filtre ROME est resté
   inerte sur les 881 offres déjà collectées, faute de `romeCode` dans la base. Une règle nouvelle
   qui s'appuie sur un champ absent doit conserver l'offre plutôt que l'écarter, et le dire.
@@ -52,12 +56,12 @@ ce fichier. Aucun autre module n'importe `subprocess`.
   `MOTIFS_STAGE_DESCRIPTION` : chercher « stage » partout dans la description écartait 19 offres
   sur 31 à tort, dont cinq postes de formateur (« la compréhension de vos stagiaires ») et une
   offre junior (« première expérience (stage, alternance) »). Mesurer avant d'élargir un filtre.
-- **Ce qui est vérifiable mécaniquement ne va pas au LLM.** `DRAPEAUX_LLM` liste ce que le modèle
-  peut poser, `DRAPEAUX_DETERMINISTES` ce que Python pose seul : `rqth` (entreprise ou URL),
-  `permis`, `bac5` et `experience` (`exige_permis`, `exige_bac5`,
-  `exige_experience_dans_le_texte`). Les deux sources s'additionnent dans
-  `ajouter_drapeaux_deterministes` : les règles Python ne couvrent que des formulations
-  précises, le modèle attrape le reste.
+- **Ce qui est vérifiable mécaniquement ne va pas au LLM.** Les exigences fermées que Python sait
+  lire — permis (`exige_permis`), bac+5 (`exige_bac5`), durée d'expérience
+  (`exige_experience_dans_le_texte`) — écartent l'offre au pré-filtre : inutile de la faire noter
+  pour la recaler ensuite. `DRAPEAUX_DETERMINISTES` ne contient donc plus que `rqth`, et
+  `DRAPEAUX_LLM` garde `permis`, `bac5` et `experience` pour les formulations que ces règles ne
+  couvrent pas ; la règle de verdict s'applique alors.
 - **Chaque règle de détection a été mesurée sur les données réelles avant d'être gardée**, et les
   faux positifs constatés sont devenus des tests : `permis/certification (requis)` sur une offre
   de QA, « de bac à bac+5 » sur une offre de formateur, « bac, bac+2, bachelor/bac+3 ou

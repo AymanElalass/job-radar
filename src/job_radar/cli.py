@@ -331,12 +331,18 @@ def commande_collecter(args: argparse.Namespace, config: dict[str, Any]) -> int:
         )
         return 3
 
+    actualisees = 0
     with Historique(args.base) as historique:
         nouvelles = historique.filtrer_nouvelles(offres)
         if not args.sans_historique:
             historique.enregistrer(nouvelles)
+            # Les offres déjà connues profitent des champs ajoutés depuis leur
+            # collecte (le code ROME, par exemple), sans perdre leur statut de tri.
+            actualisees = historique.actualiser(offres)
 
     print(f"\n{len(offres)} offre(s) récupérée(s), dont {len(nouvelles)} nouvelle(s).")
+    if actualisees:
+        print(f"{actualisees} offre(s) déjà connue(s) ont été actualisée(s).")
     if nouvelles:
         afficher(nouvelles)
         ecrire_json(nouvelles, args.sortie)
