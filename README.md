@@ -52,8 +52,10 @@ une candidature.
    erreur sans bloquer les autres. Un lot qui dépasse `delai_max` secondes est abandonné de la
    même façon. Le temps écoulé est affiché pour chaque lot.
 4. Les verdicts sont stockés en SQLite : **une offre n'est jamais triée deux fois**.
-5. Affichage d'un tableau trié par score décroissant et écriture de `data/selection.json`
-   (offres `postuler` et `peut-etre`).
+5. Affichage d'un tableau trié par score décroissant et écriture de `data/selection.json`,
+   qui contient **toute** la sélection accumulée (offres `postuler` et `peut-etre`, relues
+   depuis la base) : trier par tranches avec `--limite` complète le fichier au lieu de
+   l'écraser.
 
 ## Installation
 

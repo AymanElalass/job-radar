@@ -458,6 +458,9 @@ def commande_trier(args: argparse.Namespace, config: dict[str, Any]) -> int:
         )
         console.print(f"  total : {time.monotonic() - depart:.1f} s")
         historique.enregistrer_tri(resultats, modele)
+        # La sélection est relue depuis la base : un passage partiel (--limite)
+        # complète le fichier au lieu de l'écraser avec son seul lot.
+        selection = historique.offres_triees(verdicts=VERDICTS_RETENUS)
 
     for erreur in erreurs:
         print(f"  ! {erreur}", file=sys.stderr)
@@ -465,10 +468,11 @@ def commande_trier(args: argparse.Namespace, config: dict[str, Any]) -> int:
     classees = fusionner(retenues, resultats)
     afficher_tri(console, classees)
 
-    selection = [offre for offre in classees if offre["verdict"] in VERDICTS_RETENUS]
     ecrire_json(selection, args.sortie)
+    retenues_du_passage = sum(1 for o in classees if o["verdict"] in VERDICTS_RETENUS)
     console.print(
-        f"\n{len(selection)} offre(s) retenue(s) sur {len(classees)} triée(s) → {args.sortie}"
+        f"\n{retenues_du_passage} offre(s) retenue(s) sur {len(classees)} triée(s) "
+        f"dans ce passage ; {len(selection)} au total → {args.sortie}"
     )
     return 1 if erreurs and not resultats else 0
 

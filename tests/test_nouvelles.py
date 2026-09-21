@@ -180,3 +180,50 @@ def test_effacer_tri_conserve_les_offres(historique):
 
 def test_effacer_un_tri_vide(historique):
     assert historique.effacer_tri() == 0
+
+
+def test_offres_triees_reunit_contenu_et_verdict(historique):
+    historique.enregistrer([offre("A") | {"lieu": "59 - Lille"}])
+    historique.enregistrer_tri(
+        [{"id": "A", "score": 80, "resume": "bien", "drapeaux": ["rqth"], "verdict": "postuler"}],
+        modele="haiku",
+    )
+
+    (triee,) = historique.offres_triees()
+
+    assert triee["lieu"] == "59 - Lille"
+    assert triee["score"] == 80
+    assert triee["drapeaux"] == ["rqth"]
+    assert triee["verdict"] == "postuler"
+
+
+def test_offres_triees_filtrees_par_verdict_et_classees(historique):
+    historique.enregistrer([offre("A"), offre("B"), offre("C")])
+    historique.enregistrer_tri(
+        [
+            {"id": "A", "score": 40, "resume": "", "drapeaux": [], "verdict": "peut-etre"},
+            {"id": "B", "score": 90, "resume": "", "drapeaux": [], "verdict": "postuler"},
+            {"id": "C", "score": 5, "resume": "", "drapeaux": [], "verdict": "non"},
+        ],
+        modele="haiku",
+    )
+
+    retenues = historique.offres_triees(verdicts=("postuler", "peut-etre"))
+
+    assert [o["id"] for o in retenues] == ["B", "A"]
+
+
+def test_offres_triees_ignore_les_offres_sans_contenu(tmp_path):
+    from job_radar.stockage import Historique
+
+    with Historique(tmp_path / "offres.db") as base:
+        base.connexion.execute(
+            "INSERT INTO offres (id, intitule, vue_le) VALUES ('A', 'Testeur', '2026-09-20')"
+        )
+        base.connexion.commit()
+        base.enregistrer_tri(
+            [{"id": "A", "score": 80, "resume": "", "drapeaux": [], "verdict": "postuler"}],
+            modele="haiku",
+        )
+
+        assert base.offres_triees() == []

@@ -69,6 +69,8 @@ ce fichier. Aucun autre module n'importe `subprocess`.
   invention du modèle sur ce point ne justifie pas de jeter un lot. En cas de réponse
   inexploitable : **une seule** nouvelle tentative, puis le lot est signalé en erreur et les
   autres continuent.
+- **`data/selection.json` est relu depuis la base** (`offres_triees`), jamais construit à partir
+  du seul passage en cours : sinon un `--limite 20` écrase la sélection des passages précédents.
 - **Une offre n'est jamais triée deux fois** : la table `tri` est la mémoire du tri, et
   `offres_a_trier()` exclut ce qui y figure déjà. `--reinitialiser` vide cette table (jamais les
   offres) pour retrier après un changement de prompt ou de critères ; en simulation, il n'efface

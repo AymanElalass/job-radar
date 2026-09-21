@@ -207,6 +207,36 @@ class Historique:
         self.connexion.commit()
         return curseur.rowcount
 
+    def offres_triees(self, verdicts: Sequence[str] | None = None) -> list[dict[str, Any]]:
+        """Toutes les offres déjà triées, contenu et verdict réunis, meilleur score d'abord.
+
+        Permet d'écrire la sélection complète, et non le seul dernier passage.
+        """
+        requete = (
+            "SELECT o.donnees, t.score, t.resume, t.drapeaux, t.verdict "
+            "FROM tri t JOIN offres o ON o.id = t.id "
+            "WHERE o.donnees IS NOT NULL"
+        )
+        parametres: tuple[Any, ...] = ()
+        if verdicts:
+            marqueurs = ",".join("?" * len(verdicts))
+            requete += f" AND t.verdict IN ({marqueurs})"
+            parametres = tuple(verdicts)
+        requete += " ORDER BY t.score DESC, o.id"
+
+        return [
+            json.loads(donnees)
+            | {
+                "score": score,
+                "resume": resume,
+                "drapeaux": json.loads(drapeaux),
+                "verdict": verdict,
+            }
+            for donnees, score, resume, drapeaux, verdict in self.connexion.execute(
+                requete, parametres
+            )
+        ]
+
     def effacer_tri(self) -> int:
         """Efface tous les résultats de tri, sans toucher aux offres.
 

@@ -309,3 +309,29 @@ def test_offres_rqth_conservees_par_defaut(projet, monkeypatch, capsys):
     cli.main(arguments(projet, "--simulation"))
 
     assert "4 offre(s) partiraient" in capsys.readouterr().out
+
+
+def test_la_selection_cumule_les_passages_partiels(projet, monkeypatch, capsys):
+    """Un tri par tranches ne doit pas écraser la sélection des tranches précédentes."""
+    premier = FauxLLM(
+        reponses=[
+            reponse(
+                {"id": "A", "score": 90, "resume": "", "drapeaux": [], "verdict": "postuler"},
+                {"id": "B", "score": 60, "resume": "", "drapeaux": [], "verdict": "peut-etre"},
+            )
+        ]
+    )
+    monkeypatch.setattr(cli, "creer_client", lambda *_a, **_k: premier)
+    assert cli.main(arguments(projet, "--limite", "2")) == 0
+
+    # Deuxième passage : une seule offre, qui n'est pas retenue.
+    second = FauxLLM(
+        reponses=[reponse({"id": "C", "score": 5, "resume": "", "drapeaux": [], "verdict": "non"})]
+    )
+    monkeypatch.setattr(cli, "creer_client", lambda *_a, **_k: second)
+    assert cli.main(arguments(projet, "--limite", "2")) == 0
+
+    selection = json.loads(projet["sortie"].read_text(encoding="utf-8"))
+    assert [offre["id"] for offre in selection] == ["A", "B"]
+    sortie = capsys.readouterr().out
+    assert "0 offre(s) retenue(s) sur 1 triée(s) dans ce passage ; 2 au total" in sortie
