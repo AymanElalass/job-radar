@@ -270,6 +270,7 @@ L'appel est volontairement réduit à un **simple appel de modèle** : aucun out
 ```bash
 uv run job-radar collecter   # ou simplement « uv run job-radar »
 uv run job-radar trier
+uv run job-radar selection
 ```
 
 `config.toml` décrit la veille livrée : métiers informatiques et formation (filtre ROME),
@@ -386,6 +387,35 @@ uv run job-radar trier --limite 20 --modele sonnet             # comparer deux m
 
 Les offres déjà triées ne repartent jamais au LLM : relancer la commande ne traite que les
 nouveautés.
+
+### `selection`
+
+Affiche la sélection accumulée — tous les passages de tri confondus —, meilleur score d'abord,
+avec le numéro de l'offre et son lien :
+
+| Option | Rôle |
+| --- | --- |
+| `--config CHEMIN` | autre fichier de critères (défaut `config.toml`) |
+| `--base CHEMIN` | autre base d'historique (défaut `data/offres.db`) |
+| `--verdict VERDICT` | n'afficher qu'un verdict : `postuler`, `peut-etre` ou `non` |
+
+```
+$ uv run job-radar selection --verdict postuler
+
+                                        Sélection
+┏━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━┓
+┃ Offre    ┃ Score ┃ Verdict   ┃ Intitulé                   ┃ Entreprise  ┃ Lieu     ┃ Drapeaux ┃
+┡━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━┩
+│ 6998109  │    85 │ postuler  │ Testeur informatique (H/F) │ ACTUA METZ  │ 57 -Metz │          │
+│          │       │           │ https://exemple.fr/o/69981 │             │          │          │
+└──────────┴───────┴───────────┴────────────────────────────┴─────────────┴──────────┴──────────┘
+
+15 offre(s) : postuler.
+```
+
+Le numéro de l'offre et le lien sont cliquables dans les terminaux qui le savent, et le lien
+reste écrit en clair pour être copié partout ailleurs. Dans un terminal de moins de 140
+colonnes, la colonne « Résumé » cède la place plutôt que d'être tronquée au bord du tableau.
 
 ## Développement
 

@@ -15,7 +15,7 @@ retenir **que celles qui valent une candidature** après notation par un LLM (co
 - code applicatif dans `src/job_radar/`, tests dans `tests/`
 - dépendances : `requests`, `python-dotenv`, `rich` ; dev : `pytest`, `ruff`
 - commande exposée : `job-radar` → `job_radar.cli:main`, avec les sous-commandes `collecter`
-  (celle par défaut, pour rester compatible avec `job-radar` seul) et `trier`
+  (celle par défaut, pour rester compatible avec `job-radar` seul), `trier` et `selection`
 - le tri appelle la CLI `claude` (Claude Code) en sous-processus
 
 ## Architecture
@@ -96,6 +96,8 @@ ce fichier. Aucun autre module n'importe `subprocess`.
   autres continuent.
 - **`data/selection.json` est relu depuis la base** (`offres_triees`), jamais construit à partir
   du seul passage en cours : sinon un `--limite 20` écrase la sélection des passages précédents.
+  `job-radar selection` lit la même source et l'affiche dans le tableau du tri, avec le numéro
+  et le lien de chaque offre (`afficher_tri(avec_lien=True)`).
 - **Une offre n'est jamais triée deux fois** : la table `tri` est la mémoire du tri, et
   `offres_a_trier()` exclut ce qui y figure déjà. `--reinitialiser` vide cette table (jamais les
   offres) pour retrier après un changement de prompt ou de critères ; en simulation, il n'efface

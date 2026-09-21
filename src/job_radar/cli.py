@@ -34,6 +34,7 @@ from job_radar.tri import (
     DRAPEAUX_ELIMINATOIRES,
     EXPERIENCE_MAX_DEFAUT,
     TAILLE_LOT_DEFAUT,
+    VERDICTS,
     VERDICTS_RETENUS,
     ErreurTri,
     charger_criteres,
@@ -345,6 +346,18 @@ def construire_parseur() -> argparse.ArgumentParser:
         default=None,
         help="modèle à utiliser, au lieu de celui de config.toml",
     )
+    liste = sous_parseurs.add_parser(
+        "selection",
+        parents=[commun],
+        help="afficher la sélection accumulée, tous passages de tri confondus",
+    )
+    liste.add_argument(
+        "--verdict",
+        choices=VERDICTS,
+        default=None,
+        help="n'afficher qu'un verdict (défaut : postuler et peut-etre)",
+    )
+
     tri.add_argument(
         "--importer",
         dest="importer_json",
@@ -359,7 +372,7 @@ def construire_parseur() -> argparse.ArgumentParser:
 
 
 #: Sous-commandes reconnues ; toute autre entrée est traitée comme « collecter ».
-COMMANDES = ("collecter", "trier")
+COMMANDES = ("collecter", "trier", "selection")
 
 
 def _argv_normalise(argv: list[str]) -> list[str]:
@@ -382,6 +395,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.commande == "trier":
         return commande_trier(args, config)
+    if args.commande == "selection":
+        return commande_selection(args, config)
     return commande_collecter(args, config)
 
 
@@ -447,6 +462,11 @@ def commande_collecter(args: argparse.Namespace, config: dict[str, Any]) -> int:
 
 
 LARGEUR_HORS_TERMINAL = 150
+
+#: En dessous de cette largeur, la vue « sélection » laisse tomber le résumé :
+#: huit colonnes dont un lien ne tiennent pas dans un terminal étroit, et un
+#: résumé tronqué au bord du tableau ne sert personne.
+LARGEUR_MIN_RESUME = 140
 
 
 def creer_console() -> Console:
@@ -596,6 +616,27 @@ def commande_trier(args: argparse.Namespace, config: dict[str, Any]) -> int:
     return 1 if erreurs and not resultats else 0
 
 
+def commande_selection(args: argparse.Namespace, config: dict[str, Any]) -> int:
+    """Affiche la sélection accumulée, tous passages de tri confondus."""
+    console = creer_console()
+    base = resoudre_chemin(args.base, config, "base", CHEMIN_BASE_DEFAUT)
+    verdicts = (args.verdict,) if args.verdict else VERDICTS_RETENUS
+
+    with Historique(base) as historique:
+        offres = historique.offres_triees(verdicts=verdicts)
+
+    if not offres:
+        console.print(
+            f"Aucune offre {' ou '.join(verdicts)} dans {base}. "
+            "Lancez « job-radar trier » pour en obtenir."
+        )
+        return 0
+
+    afficher_tri(console, offres, avec_lien=True, titre="Sélection")
+    console.print(f"\n{len(offres)} offre(s) : {', '.join(verdicts)}.")
+    return 0
+
+
 def _lire_json(chemin: Path) -> list[dict[str, Any]]:
     """Lit un export JSON d'offres réduites."""
     charge = json.loads(Path(chemin).read_text(encoding="utf-8"))
@@ -650,38 +691,78 @@ def _drapeaux_colores(drapeaux: list[str]) -> str:
 COULEURS_VERDICT = {"postuler": "green", "peut-etre": "yellow", "non": "dim"}
 
 
-def afficher_tri(console: Console, offres: list[dict[str, Any]]) -> None:
-    """Affiche les offres triées, meilleur score d'abord."""
+def _identifiant_cliquable(offre: dict[str, Any]) -> str:
+    """Numéro de l'offre, cliquable quand le terminal sait ouvrir les liens."""
+    identifiant = offre.get("id") or ""
+    url = offre.get("url")
+    return f"[link={url}]{identifiant}[/link]" if url else identifiant
+
+
+def _intitule_et_lien(offre: dict[str, Any]) -> str:
+    """Intitulé, suivi du lien en clair : copiable même sans terminal cliquable."""
+    intitule = offre.get("intitule") or ""
+    url = offre.get("url")
+    if not url:
+        return intitule
+    return f"{intitule}\n[link={url}][dim]{url}[/dim][/link]"
+
+
+def afficher_tri(
+    console: Console,
+    offres: list[dict[str, Any]],
+    avec_lien: bool = False,
+    titre: str = "Offres triées par score décroissant",
+) -> None:
+    """Affiche les offres triées, meilleur score d'abord.
+
+    Avec ``avec_lien``, une colonne porte le numéro de l'offre et une autre son
+    lien : de quoi retrouver l'annonce, que le terminal sache ouvrir les liens
+    cliquables ou non.
+    """
     if not offres:
         return
 
     table = Table(
-        title="Offres triées par score décroissant",
+        title=titre,
         header_style="bold",
         show_lines=True,
         expand=True,
     )
+    # Le lien occupe la place d'un résumé : dans un terminal étroit, il faut choisir.
+    avec_resume = not avec_lien or console.width >= LARGEUR_MIN_RESUME
+
+    if avec_lien:
+        table.add_column("Offre", width=8, overflow="fold")
     table.add_column("Score", justify="right", width=5)
     table.add_column("Verdict", width=9)
-    table.add_column("Intitulé", max_width=32, overflow="fold")
-    table.add_column("Entreprise", max_width=18, overflow="fold")
-    table.add_column("Lieu", max_width=14, overflow="fold")
-    table.add_column("Drapeaux", max_width=20, overflow="fold")
-    table.add_column("Résumé", ratio=1, min_width=30, overflow="fold")
+    # Avec le lien, l'intitulé est plus haut et les autres colonnes cèdent de la
+    # place pour que le résumé reste lisible.
+    table.add_column("Intitulé", max_width=34 if avec_lien else 32, overflow="fold")
+    table.add_column("Entreprise", max_width=16 if avec_lien else 18, overflow="fold")
+    table.add_column("Lieu", max_width=12 if avec_lien else 14, overflow="fold")
+    # 19 caractères : « teletravail_complet » tient d'une pièce, ce qui est la
+    # moindre des choses pour le drapeau qu'on met en valeur.
+    table.add_column("Drapeaux", max_width=19 if avec_lien else 20, overflow="fold")
+    if avec_resume:
+        table.add_column("Résumé", ratio=1, min_width=30, overflow="fold")
 
     for offre in offres:
         couleur = COULEURS_VERDICT.get(offre["verdict"], "")
         style = f"[{couleur}]" if couleur else ""
         fin = f"[/{couleur}]" if couleur else ""
-        table.add_row(
+        cellules = [
             f"{style}{offre['score']}{fin}",
             f"{style}{offre['verdict']}{fin}",
-            offre.get("intitule") or "",
+            _intitule_et_lien(offre) if avec_lien else (offre.get("intitule") or ""),
             offre.get("entreprise") or "",
             offre.get("lieu") or "",
             _drapeaux_colores(offre.get("drapeaux") or []),
-            offre.get("resume") or "",
-        )
+        ]
+        if avec_resume:
+            cellules.append(offre.get("resume") or "")
+        if avec_lien:
+            cellules.insert(0, _identifiant_cliquable(offre))
+        table.add_row(*cellules)
 
     console.print()
     console.print(table)
