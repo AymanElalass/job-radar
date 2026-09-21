@@ -17,7 +17,6 @@ from job_radar.tri import (
     LONGUEUR_DESCRIPTION,
     MOTIF_BAC5,
     MOTIF_DOUBLON,
-    MOTIF_EXPERIENCE,
     MOTIF_LIBERALE,
     MOTIF_PERMIS,
     MOTIF_ROME,
@@ -28,6 +27,7 @@ from job_radar.tri import (
     ErreurReponseLLM,
     ErreurTri,
     ajouter_drapeaux_deterministes,
+    annees_exigees,
     annees_experience,
     appliquer_regle_verdict,
     charger_criteres,
@@ -44,6 +44,7 @@ from job_radar.tri import (
     exige_experience_longue,
     exige_permis,
     fusionner,
+    motif_experience,
     normaliser_intitule,
     normaliser_ville,
     prefiltrer,
@@ -131,7 +132,7 @@ def test_prefiltre_ecarte_freelance_experience_et_doublons():
     assert [o["id"] for o in retenues] == ["A", "E"]
     assert [(o["id"], motif) for o, motif in ecartees] == [
         ("B", MOTIF_LIBERALE),
-        ("C", MOTIF_EXPERIENCE),
+        ("C", motif_experience()),
         ("D", MOTIF_DOUBLON),
     ]
 
@@ -1086,7 +1087,7 @@ def test_cas_reel_java_fullstack_ecarte_malgre_debutant_accepte():
     retenues, ecartees = prefiltrer([java_fullstack])
 
     assert retenues == []
-    assert ecartees == [(java_fullstack, MOTIF_EXPERIENCE)]
+    assert ecartees == [(java_fullstack, motif_experience())]
 
 
 def test_exigence_lue_dans_toute_la_description():
@@ -1123,16 +1124,19 @@ def test_experience_ecartee_meme_si_le_libelle_api_dit_debutant():
     )
 
     assert [(o["id"], motif) for o, motif in ecartees] == [
-        ("A", MOTIF_EXPERIENCE),
-        ("B", MOTIF_EXPERIENCE),
+        ("A", motif_experience()),
+        ("B", motif_experience()),
     ]
 
 
-def test_experience_n_est_plus_un_drapeau_deterministe():
-    # Une offre qui réclame cinq ans est écartée, donc jamais retenue avec un drapeau.
-    assert "experience" not in DRAPEAUX_DETERMINISTES
-    assert drapeaux_deterministes(offre("A", description="5 ans minimum exigés.")) == []
-    # Le modèle reste libre de poser le drapeau sur d'autres formulations.
+def test_experience_n_est_pas_signalee_quand_elle_ecarte():
+    # Au plafond par défaut, une offre réclamant cinq ans est écartée : inutile de
+    # lui poser un drapeau qu'on ne verra jamais.
+    exigeante = offre("A", description="5 ans minimum exigés.")
+
+    assert drapeaux_deterministes(exigeante) == []
+    # Avec un plafond plus haut, l'offre est gardée et l'exigence reste visible.
+    assert drapeaux_deterministes(exigeante, experience_max=5) == ["experience"]
     assert "experience" in DRAPEAUX_LLM
 
 
@@ -1235,11 +1239,86 @@ def test_licence_acceptee_reste_retenue():
     assert [o["id"] for o in retenues] == ["A", "B"]
 
 
-def test_rqth_reste_le_seul_drapeau_deterministe():
-    # permis, bac5 et experience écartent l'offre : ils n'ont plus à être signalés.
-    assert DRAPEAUX_DETERMINISTES == ("rqth",)
+def test_permis_et_bac5_ne_sont_plus_des_drapeaux_deterministes():
+    # Ils écartent l'offre : ils n'ont plus à être signalés sur une offre retenue.
+    assert DRAPEAUX_DETERMINISTES == ("rqth", "experience")
     retenue = offre("A", description="Permis B obligatoire. Formation bac+5 exigée.")
     assert drapeaux_deterministes(retenue) == []
     # Le modèle garde la main sur ces drapeaux, et la règle de verdict s'applique.
     for drapeau in ("permis", "bac5", "experience"):
         assert drapeau in DRAPEAUX_LLM
+
+
+# ----------------------------- plafond d'expérience : drapeau ou écartement
+
+
+def exigeante(identifiant, titre, annees):
+    return offre(
+        identifiant,
+        intitule=titre,
+        entreprise=f"Entreprise {identifiant}",
+        description=f"{annees} ans minimum d'expérience exigés.",
+    )
+
+
+def test_par_defaut_toute_experience_exigee_ecarte():
+    offres = [exigeante("A", "Testeur", 3), exigeante("B", "Analyste", 5)]
+
+    retenues, ecartees = prefiltrer(offres)
+
+    assert retenues == []
+    assert [motif for _, motif in ecartees] == [motif_experience(), motif_experience()]
+
+
+def test_plafond_releve_garde_l_offre_avec_un_drapeau():
+    offres = [
+        offre("A", intitule="Vendeur", entreprise="E1"),
+        exigeante("B", "Analyste", 3),
+        exigeante("C", "Intégrateur", 5),
+        exigeante("D", "Architecte", 7),
+    ]
+
+    retenues, ecartees = prefiltrer(offres, experience_max=5)
+
+    assert [o["id"] for o in retenues] == ["A", "B", "C"]
+    assert [(o["id"], motif) for o, motif in ecartees] == [("D", motif_experience(5))]
+    assert drapeaux_deterministes(retenues[0], experience_max=5) == []
+    assert drapeaux_deterministes(retenues[1], experience_max=5) == ["experience"]
+    assert drapeaux_deterministes(retenues[2], experience_max=5) == ["experience"]
+
+
+def test_le_motif_dit_la_duree_toleree():
+    assert motif_experience() == "plus de 2 ans d'expérience exigés"
+    assert motif_experience(5) == "plus de 5 ans d'expérience exigés"
+
+
+@pytest.mark.parametrize(
+    ("libelle_api", "description", "attendu"),
+    [
+        ("Débutant accepté", "Poste ouvert à tous.", None),
+        ("3 An(s)", "Poste ouvert.", 3),
+        ("Débutant accepté", "5 ans minimum exigés.", 5),
+        # La plus longue des deux sources l'emporte.
+        ("3 An(s)", "7 ans minimum exigés.", 7),
+        ("6 An(s)", "3 ans minimum exigés.", 6),
+    ],
+)
+def test_annees_exigees_combine_les_deux_sources(libelle_api, description, attendu):
+    assert annees_exigees(offre("A", experience=libelle_api, description=description)) == attendu
+
+
+def test_drapeau_experience_transmis_au_tri_d_un_lot():
+    client = FauxLLM(
+        reponses=[
+            reponse(
+                {"id": "A", "score": 60, "resume": "ok", "drapeaux": [], "verdict": "peut-etre"}
+            )
+        ]
+    )
+    lot = [exigeante("A", "Analyste", 4)]
+
+    (resultat,) = trier_lot(client, CRITERES, lot, experience_max=5)
+
+    assert resultat["drapeaux"] == ["experience"]
+    # « experience » n'est pas rédhibitoire : le verdict du modèle est conservé.
+    assert resultat["verdict"] == "peut-etre"

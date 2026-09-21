@@ -1,5 +1,7 @@
 """Tests de la configuration et de l'orchestration des recherches (aucun appel réseau)."""
 
+from pathlib import Path
+
 import pytest
 
 from faux_reseau import FauxClient
@@ -30,19 +32,25 @@ def test_config_complete(tmp_path):
 
     config = charger_config(chemin)
 
-    assert config == {
-        "mots_cles": ["python", "data engineer"],
-        "departements": ["75", "92"],
-        "publiee_depuis": 3,
-        "pages_max": 2,
-        "tri": {
-            "criteres": None,
-            "modele": "sonnet",
-            "taille_lot": 20,
-            "delai_max": 180,
-            "exclure_rqth": False,
-            "codes_rome": ["M18", "K2107", "K2111"],
-        },
+    assert config["recherches"] == [
+        {
+            "mots_cles": ["python", "data engineer"],
+            "departements": ["75", "92"],
+            "commune": None,
+            "distance": None,
+            "publiee_depuis": 3,
+            "pages_max": 2,
+        }
+    ]
+    assert config["chemins"] == {"base": None, "nouvelles": None, "selection": None}
+    assert config["tri"] == {
+        "criteres": None,
+        "modele": "sonnet",
+        "taille_lot": 20,
+        "delai_max": 180,
+        "exclure_rqth": False,
+        "codes_rome": ["M18", "K2107", "K2111"],
+        "experience_max": 2,
     }
 
 
@@ -56,7 +64,7 @@ def test_liste_de_departements_vide_acceptee(tmp_path):
         """,
     )
 
-    assert charger_config(chemin)["departements"] == []
+    assert charger_config(chemin)["recherches"][0]["departements"] == []
 
 
 def test_departements_absents_acceptes(tmp_path):
@@ -68,7 +76,7 @@ def test_departements_absents_acceptes(tmp_path):
         """,
     )
 
-    assert charger_config(chemin)["departements"] == []
+    assert charger_config(chemin)["recherches"][0]["departements"] == []
 
 
 def test_mots_cles_obligatoires(tmp_path):
@@ -107,7 +115,7 @@ def test_mots_cles_normalises_a_la_lecture(tmp_path):
         """,
     )
 
-    assert charger_config(chemin)["mots_cles"] == ["alternance data"]
+    assert charger_config(chemin)["recherches"][0]["mots_cles"] == ["alternance data"]
 
 
 def test_section_tri_lue(tmp_path):
@@ -134,6 +142,7 @@ def test_section_tri_lue(tmp_path):
         "delai_max": 90,
         "exclure_rqth": True,
         "codes_rome": ["M1805", "K2111"],
+        "experience_max": 2,
     }
 
 
@@ -192,8 +201,16 @@ def test_config_introuvable(tmp_path):
 
 # ------------------------------------------------------ orchestration
 def config(**surcharges):
-    base = {"mots_cles": ["python"], "departements": [], "publiee_depuis": 7, "pages_max": 1}
-    return base | surcharges
+    """Configuration d'une seule recherche, pour tester l'orchestration."""
+    recherche = {
+        "mots_cles": ["python"],
+        "departements": [],
+        "commune": None,
+        "distance": None,
+        "publiee_depuis": 7,
+        "pages_max": 1,
+    } | surcharges
+    return {"recherches": [recherche]}
 
 
 def test_une_seule_requete_par_mot_cle_sans_departement():
@@ -201,9 +218,9 @@ def test_une_seule_requete_par_mot_cle_sans_departement():
 
     collecter(client, config(mots_cles=["python", "data engineer"]), bavard=False)
 
-    assert client.appels == [
-        {"mots_cles": "python", "departement": None, "publiee_depuis": 7, "page": 0},
-        {"mots_cles": "data engineer", "departement": None, "publiee_depuis": 7, "page": 0},
+    assert [(a["mots_cles"], a["departement"], a["commune"]) for a in client.appels] == [
+        ("python", None, None),
+        ("data engineer", None, None),
     ]
 
 
@@ -249,8 +266,8 @@ def test_echec_authentification_interrompt_tout_de_suite():
 
 def test_echec_d_une_recherche_n_interrompt_pas_les_suivantes(capsys):
     class ClientCapricieux(FauxClient):
-        def rechercher(self, mots_cles, departement=None, publiee_depuis=7, page=0):
-            super().rechercher(mots_cles, departement, publiee_depuis, page)
+        def rechercher(self, mots_cles=None, departement=None, **kwargs):
+            super().rechercher(mots_cles, departement, **kwargs)
             if departement == "75":
                 raise ErreurRecherche("recherche en échec (500)")
             return [{"id": f"{mots_cles}-{departement}", "intitule": "Poste"}]
@@ -261,3 +278,187 @@ def test_echec_d_une_recherche_n_interrompt_pas_les_suivantes(capsys):
     assert [offre["id"] for offre in offres] == ["python-92"]
     assert len(client.appels) == 2
     assert "recherche en échec" in capsys.readouterr().err
+
+
+# -------------------------------------------- plusieurs recherches, commune
+
+
+def test_plusieurs_recherches(tmp_path):
+    chemin = ecrire_config(
+        tmp_path,
+        """
+        [[recherche]]
+        commune = "66008"
+        distance = 30
+        publiee_depuis = 14
+        pages_max = 7
+
+        [[recherche]]
+        mots_cles = ["full remote"]
+        publiee_depuis = 14
+        """,
+    )
+
+    recherches = charger_config(chemin)["recherches"]
+
+    assert len(recherches) == 2
+    assert recherches[0] == {
+        "mots_cles": [],
+        "departements": [],
+        "commune": "66008",
+        "distance": 30,
+        "publiee_depuis": 14,
+        "pages_max": 7,
+    }
+    assert recherches[1]["mots_cles"] == ["full remote"]
+    assert recherches[1]["commune"] is None
+
+
+def test_commune_sans_mot_cle_acceptee(tmp_path):
+    chemin = ecrire_config(
+        tmp_path,
+        """
+        [recherche]
+        commune = "66008"
+        distance = 30
+        """,
+    )
+
+    (recherche,) = charger_config(chemin)["recherches"]
+
+    assert recherche["mots_cles"] == []
+    assert recherche["commune"] == "66008"
+
+
+def test_recherche_sans_mot_cle_ni_commune_refusee(tmp_path):
+    chemin = ecrire_config(
+        tmp_path,
+        """
+        [recherche]
+        departements = ["66"]
+        """,
+    )
+
+    with pytest.raises(ErreurConfiguration, match="au moins un mot-clé ou une commune"):
+        charger_config(chemin)
+
+
+def test_distance_sans_commune_refusee(tmp_path):
+    chemin = ecrire_config(
+        tmp_path,
+        """
+        [recherche]
+        mots_cles = ["python"]
+        distance = 30
+        """,
+    )
+
+    with pytest.raises(ErreurConfiguration, match="distance"):
+        charger_config(chemin)
+
+
+def test_distance_negative_refusee(tmp_path):
+    chemin = ecrire_config(
+        tmp_path,
+        """
+        [recherche]
+        commune = "66008"
+        distance = -5
+        """,
+    )
+
+    with pytest.raises(ErreurConfiguration, match="positive"):
+        charger_config(chemin)
+
+
+def test_distance_nulle_acceptee(tmp_path):
+    chemin = ecrire_config(
+        tmp_path,
+        """
+        [recherche]
+        commune = "66008"
+        distance = 0
+        """,
+    )
+
+    assert charger_config(chemin)["recherches"][0]["distance"] == 0
+
+
+def test_chemins_et_plafond_d_experience(tmp_path):
+    chemin = ecrire_config(
+        tmp_path,
+        """
+        [recherche]
+        commune = "66008"
+
+        [chemins]
+        base = "data/argeles.db"
+        nouvelles = "data/nouvelles-argeles.json"
+        selection = "data/selection-argeles.json"
+
+        [tri]
+        codes_rome = []
+        experience_max = 5
+        """,
+    )
+
+    config = charger_config(chemin)
+
+    assert config["chemins"]["base"] == Path("data/argeles.db")
+    assert config["chemins"]["selection"] == Path("data/selection-argeles.json")
+    assert config["tri"]["codes_rome"] == []
+    assert config["tri"]["experience_max"] == 5
+
+
+def test_une_seule_requete_sans_mot_cle_autour_d_une_commune():
+    client = FauxClient()
+
+    collecter(client, config(mots_cles=[], commune="66008", distance=30), bavard=False)
+
+    assert client.appels == [
+        {
+            "mots_cles": None,
+            "departement": None,
+            "commune": "66008",
+            "distance": 30,
+            "publiee_depuis": 7,
+            "page": 0,
+        }
+    ]
+
+
+def test_toutes_les_recherches_sont_lancees_et_dedoublonnees():
+    client = FauxClient(
+        resultats_par_appel=[
+            [{"id": "A", "intitule": "Poste A"}],
+            [{"id": "A", "intitule": "Poste A"}, {"id": "B", "intitule": "Poste B"}],
+        ]
+    )
+    configuration = {
+        "recherches": [
+            {
+                "mots_cles": [],
+                "departements": [],
+                "commune": "66008",
+                "distance": 30,
+                "publiee_depuis": 14,
+                "pages_max": 1,
+            },
+            {
+                "mots_cles": ["full remote"],
+                "departements": [],
+                "commune": None,
+                "distance": None,
+                "publiee_depuis": 14,
+                "pages_max": 1,
+            },
+        ]
+    }
+
+    offres = collecter(client, configuration, bavard=False)
+
+    assert [o["id"] for o in offres] == ["A", "B"]
+    assert [(a["commune"], a["mots_cles"]) for a in client.appels] == [
+        ("66008", None),
+        (None, "full remote"),
+    ]

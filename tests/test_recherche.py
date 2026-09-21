@@ -11,6 +11,7 @@ from job_radar.client import (
     ClientFranceTravail,
     ErreurAuthentification,
     ErreurRecherche,
+    decrire_recherche,
     normaliser_mot_cle,
 )
 
@@ -176,3 +177,75 @@ def test_jeton_reutilise_entre_deux_recherches():
 
     assert len(session.appels_token) == 1
     assert len(session.appels_recherche) == 2
+
+
+# ------------------------------------------------- recherche autour d'une commune
+
+
+def test_commune_et_distance_transmises():
+    session = FausseSession()
+
+    client_avec(session).rechercher(commune="66008", distance=30)
+
+    parametres = session.appels_recherche[0]["params"]
+    assert parametres["commune"] == "66008"
+    assert parametres["distance"] == 30
+
+
+def test_recherche_sans_mot_cle():
+    session = FausseSession()
+
+    client_avec(session).rechercher(commune="66008", distance=30)
+
+    # Pas de motsCles : toutes les offres de la zone sont demandées.
+    assert "motsCles" not in session.appels_recherche[0]["params"]
+
+
+def test_distance_nulle_transmise():
+    # distance=0 signifie « la commune seule », ce n'est pas une absence de valeur.
+    session = FausseSession()
+
+    client_avec(session).rechercher(commune="66008", distance=0)
+
+    assert session.appels_recherche[0]["params"]["distance"] == 0
+
+
+def test_commune_absente_par_defaut():
+    session = FausseSession()
+
+    client_avec(session).rechercher("python")
+
+    parametres = session.appels_recherche[0]["params"]
+    assert "commune" not in parametres
+    assert "distance" not in parametres
+
+
+def test_mot_cle_et_commune_cumulables():
+    session = FausseSession()
+
+    client_avec(session).rechercher("testeur", commune="66008", distance=10)
+
+    parametres = session.appels_recherche[0]["params"]
+    assert parametres["motsCles"] == "testeur"
+    assert parametres["commune"] == "66008"
+
+
+def test_erreur_de_recherche_decrit_la_commune():
+    session = FausseSession(reponses_recherche=[FausseReponse(400, texte="Bad Request")])
+
+    with pytest.raises(ErreurRecherche, match="commune 66008"):
+        client_avec(session).rechercher(commune="66008", distance=30)
+
+
+@pytest.mark.parametrize(
+    ("arguments", "attendu"),
+    [
+        ({"mots_cles": "python", "departement": "75"}, "'python' / dép. 75"),
+        ({"commune": "66008", "distance": 30}, "toutes offres / commune 66008 (30 km)"),
+        ({"commune": "66008"}, "toutes offres / commune 66008"),
+        ({"mots_cles": "full remote"}, "'full remote' / France entière"),
+        ({}, "toutes offres / France entière"),
+    ],
+)
+def test_description_d_une_recherche(arguments, attendu):
+    assert decrire_recherche(**arguments) == attendu

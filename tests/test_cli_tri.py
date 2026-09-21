@@ -171,7 +171,7 @@ def test_prefiltre_detaille_les_offres_ecartees(projet, monkeypatch, capsys):
     sortie = capsys.readouterr().out
     assert "2 écartée(s) sans" in sortie
     assert "profession libérale" in sortie
-    assert "3 ans d'expérience ou plus" in sortie
+    assert "d'expérience exigés" in sortie
 
 
 def test_criteres_manquants_signales(tmp_path, capsys):
@@ -335,3 +335,76 @@ def test_la_selection_cumule_les_passages_partiels(projet, monkeypatch, capsys):
     assert [offre["id"] for offre in selection] == ["A", "B"]
     sortie = capsys.readouterr().out
     assert "0 offre(s) retenue(s) sur 1 triée(s) dans ce passage ; 2 au total" in sortie
+
+
+def test_chemins_de_la_configuration_utilises(tmp_path, monkeypatch, capsys):
+    """Base et sélection peuvent venir du fichier de configuration."""
+    criteres = tmp_path / "criteres.md"
+    criteres.write_text(CRITERES, encoding="utf-8")
+    base = tmp_path / "argeles.db"
+    selection = tmp_path / "selection-argeles.json"
+    config = tmp_path / "config-argeles.toml"
+    config.write_text(
+        f"""
+        [recherche]
+        commune = "66008"
+        distance = 30
+
+        [chemins]
+        base = "{base}"
+        selection = "{selection}"
+
+        [tri]
+        criteres = "{criteres}"
+        codes_rome = []
+        experience_max = 5
+        """,
+        encoding="utf-8",
+    )
+    with Historique(base) as historique:
+        historique.enregistrer([offre("A", description="4 ans minimum d'expérience exigés.")])
+
+    client = FauxLLM(
+        reponses=[
+            reponse(
+                {"id": "A", "score": 70, "resume": "ok", "drapeaux": [], "verdict": "peut-etre"}
+            )
+        ]
+    )
+    monkeypatch.setattr(cli, "creer_client", lambda *_a, **_k: client)
+
+    assert cli.main(["trier", "--config", str(config)]) == 0
+
+    # L'offre est gardée malgré les quatre ans demandés, et signalée.
+    retenues = json.loads(selection.read_text(encoding="utf-8"))
+    assert [o["id"] for o in retenues] == ["A"]
+    assert retenues[0]["drapeaux"] == ["experience"]
+    assert str(selection) in capsys.readouterr().out
+
+
+def test_option_base_prioritaire_sur_la_configuration(tmp_path, monkeypatch, capsys):
+    criteres = tmp_path / "criteres.md"
+    criteres.write_text(CRITERES, encoding="utf-8")
+    config = tmp_path / "config.toml"
+    config.write_text(
+        f"""
+        [recherche]
+        mots_cles = ["testeur"]
+
+        [chemins]
+        base = "{tmp_path / "ignoree.db"}"
+
+        [tri]
+        criteres = "{criteres}"
+        """,
+        encoding="utf-8",
+    )
+    base = tmp_path / "choisie.db"
+    with Historique(base) as historique:
+        historique.enregistrer([offre("A")])
+    monkeypatch.setattr(cli, "creer_client", lambda *_a, **_k: FauxLLM())
+
+    cli.main(["trier", "--config", str(config), "--base", str(base), "--simulation"])
+
+    assert "1 offre(s) partiraient" in capsys.readouterr().out
+    assert not (tmp_path / "ignoree.db").exists()

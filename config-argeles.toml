@@ -1,0 +1,44 @@
+# Veille large autour d'Argelès-sur-Mer, tous métiers.
+#
+# Ce mode est indépendant de config.toml : base, sélection et critères séparés.
+#   uv run job-radar collecter --config config-argeles.toml
+#   uv run job-radar trier --config config-argeles.toml
+
+# Toutes les offres dans un rayon de 30 km autour d'Argelès-sur-Mer (INSEE 66008),
+# sans mot-clé. L'API remonte aussi les offres jusqu'à 30 % au-delà du rayon.
+[[recherche]]
+commune = "66008"
+distance = 30
+publiee_depuis = 14
+pages_max = 7
+
+# Et, partout en France, les offres qui annoncent du télétravail complet.
+[[recherche]]
+mots_cles = [
+  "100% télétravail",
+  "télétravail complet",
+  "full remote",
+  "full télétravail",
+]
+publiee_depuis = 14
+pages_max = 3
+
+# Fichiers propres à ce mode : l'historique et la sélection ne se mélangent pas
+# avec ceux de la veille informatique.
+[chemins]
+base = "data/argeles.db"
+nouvelles = "data/nouvelles-argeles.json"
+selection = "data/selection-argeles.json"
+
+[tri]
+criteres = "~/Documents/cv/criteres-large.md"
+modele = "sonnet"
+taille_lot = 20
+delai_max = 180
+
+# Tous métiers : aucun filtre sur les codes ROME.
+codes_rome = []
+
+# Expérience : jusqu'à 5 ans demandés, l'offre est gardée avec le drapeau
+# « experience » ; au-delà seulement, elle est écartée.
+experience_max = 5

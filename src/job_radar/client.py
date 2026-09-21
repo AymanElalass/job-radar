@@ -130,6 +130,26 @@ def _extraire_url(offre: dict[str, Any]) -> str | None:
     return origine.get("urlOrigine")
 
 
+def decrire_recherche(
+    mots_cles: str | None = None,
+    departement: str | None = None,
+    commune: str | None = None,
+    distance: int | None = None,
+) -> str:
+    """Décrit une recherche en une ligne lisible, pour les journaux et les erreurs."""
+    quoi = repr(mots_cles) if mots_cles else "toutes offres"
+
+    if commune is not None:
+        rayon = f" ({distance} km)" if distance is not None else ""
+        ou = f"commune {commune}{rayon}"
+    elif departement is not None:
+        ou = f"dép. {departement}"
+    else:
+        ou = "France entière"
+
+    return f"{quoi} / {ou}"
+
+
 def construire_range(page: int) -> str:
     """Construit la valeur du paramètre ``range`` pour la page demandée (0 = première page)."""
     debut = page * TAILLE_PAGE
@@ -195,16 +215,24 @@ class ClientFranceTravail:
 
     def rechercher(
         self,
-        mots_cles: str,
+        mots_cles: str | None = None,
         departement: str | None = None,
+        commune: str | None = None,
+        distance: int | None = None,
         publiee_depuis: int = 7,
         page: int = 0,
     ) -> list[dict[str, Any]]:
         """Renvoie les offres brutes d'une page de résultats, les plus récentes d'abord.
 
-        ``departement`` à ``None`` omet le paramètre : la recherche porte alors sur
-        toute la France. Les statuts 200 et 206 contiennent des résultats, 204 signifie
-        « aucune offre ».
+        Tous les critères sont facultatifs et seuls ceux fournis sont envoyés :
+
+        - ``mots_cles`` à ``None`` cherche sans mot-clé, donc toutes les offres de la zone ;
+        - ``departement`` à ``None`` ne filtre pas par département ;
+        - ``commune`` est un code INSEE et ``distance`` le rayon en kilomètres autour
+          d'elle (10 par défaut côté API, ``0`` pour la commune seule). L'API remonte
+          aussi les offres jusqu'à 30 % au-delà du rayon demandé.
+
+        Les statuts 200 et 206 contiennent des résultats, 204 signifie « aucune offre ».
         """
         if publiee_depuis not in PUBLIEE_DEPUIS_VALIDES:
             raise ValueError(
@@ -213,15 +241,20 @@ class ClientFranceTravail:
             )
 
         parametres: dict[str, Any] = {
-            "motsCles": normaliser_mot_cle(mots_cles),
             "publieeDepuis": publiee_depuis,
             "range": construire_range(page),
             # Sans tri explicite, l'API classe par pertinence : la pagination ne
             # ramènerait pas forcément les offres les plus récentes.
             "sort": SORT_DATE_DECROISSANTE,
         }
+        if mots_cles:
+            parametres["motsCles"] = normaliser_mot_cle(mots_cles)
         if departement is not None:
             parametres["departement"] = departement
+        if commune is not None:
+            parametres["commune"] = commune
+        if distance is not None:
+            parametres["distance"] = distance
 
         self._attendre_quota()
         reponse = self.session.get(
@@ -237,10 +270,10 @@ class ClientFranceTravail:
         if reponse.status_code == 204:
             return []
         if reponse.status_code not in (200, 206):
-            zone = f"dép. {departement}" if departement is not None else "France entière"
             raise ErreurRecherche(
-                f"recherche en échec ({reponse.status_code}) pour {mots_cles!r} / "
-                f"{zone} : {reponse.text[:200]}"
+                f"recherche en échec ({reponse.status_code}) pour "
+                f"{decrire_recherche(mots_cles, departement, commune, distance)} : "
+                f"{reponse.text[:200]}"
             )
 
         return reponse.json().get("resultats") or []

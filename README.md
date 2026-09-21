@@ -147,6 +147,42 @@ Quelques règles utiles :
   chercher deux choses, écrivez deux entrées dans la liste. Un mot-clé invalide est refusé dès
   la lecture de `config.toml`, avant tout appel réseau.
 
+### Plusieurs recherches, autour d'une commune
+
+`[recherche]` décrit une recherche. Répétée sous la forme `[[recherche]]`, elle en décrit
+plusieurs, chacune avec ses propres critères — par exemple un rayon autour d'une commune
+**et** une recherche par mots-clés sur toute la France :
+
+```toml
+[[recherche]]
+commune = "66008"       # code INSEE (Argelès-sur-Mer)
+distance = 30           # rayon en km ; 0 = la commune seule, 10 par défaut côté API
+publiee_depuis = 14
+pages_max = 7
+
+[[recherche]]
+mots_cles = ["100% télétravail", "full remote"]
+publiee_depuis = 14
+```
+
+Un **mot-clé n'est pas obligatoire** dès qu'une commune est donnée : la recherche ramène alors
+toutes les offres de la zone. L'API remonte aussi les offres jusqu'à **30 % au-delà** du rayon
+demandé, et `distance` sans `commune` est refusé.
+
+Les fichiers peuvent être propres à un mode de veille, pour que deux configurations ne
+mélangent ni leur historique ni leur sélection :
+
+```toml
+[chemins]
+base = "data/argeles.db"
+nouvelles = "data/nouvelles-argeles.json"
+selection = "data/selection-argeles.json"
+```
+
+Les options `--base` et `--sortie` de la ligne de commande restent prioritaires.
+
+### Tri
+
 Le tri par LLM se règle dans le même fichier :
 
 ```toml
@@ -157,7 +193,13 @@ taille_lot = 20                               # offres envoyées en une fois
 delai_max = 180                               # secondes par lot, au-delà le lot est abandonné
 exclure_rqth = false                          # true : écarter les offres réservées RQTH
 codes_rome = ["M18", "K2107", "K2111"]        # familles de métiers retenues, [] pour tout garder
+experience_max = 2                            # années tolérées : au-delà, l'offre est écartée
 ```
+
+`experience_max` règle la sévérité sur l'expérience : au-delà de cette durée l'offre est
+écartée, et entre 3 ans et ce plafond elle est **gardée avec le drapeau `experience`**. La
+valeur par défaut (2) écarte donc dès trois ans ; une veille plus large peut monter à 5 pour
+garder les offres et se contenter du signalement.
 
 ### Fichier de critères
 
@@ -187,6 +229,18 @@ L'appel est volontairement réduit à un **simple appel de modèle** : aucun out
 ```bash
 uv run job-radar collecter   # ou simplement « uv run job-radar »
 uv run job-radar trier
+```
+
+### Deux modes livrés
+
+| Fichier | Portée | Historique |
+| --- | --- | --- |
+| `config.toml` | métiers informatiques et formation (filtre ROME), France entière | `data/offres.db` |
+| `config-argeles.toml` | tous métiers dans 30 km autour d'Argelès-sur-Mer, plus le télétravail complet partout | `data/argeles.db` |
+
+```bash
+uv run job-radar collecter --config config-argeles.toml
+uv run job-radar trier --config config-argeles.toml
 ```
 
 ### `collecter`

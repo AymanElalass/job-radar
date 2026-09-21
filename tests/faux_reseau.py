@@ -60,8 +60,10 @@ class FauxClient:
 
     def rechercher(
         self,
-        mots_cles: str,
+        mots_cles: str | None = None,
         departement: str | None = None,
+        commune: str | None = None,
+        distance: int | None = None,
         publiee_depuis: int = 7,
         page: int = 0,
     ) -> list[dict[str, Any]]:
@@ -69,6 +71,8 @@ class FauxClient:
             {
                 "mots_cles": mots_cles,
                 "departement": departement,
+                "commune": commune,
+                "distance": distance,
                 "publiee_depuis": publiee_depuis,
                 "page": page,
             }

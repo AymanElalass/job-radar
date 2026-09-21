@@ -22,6 +22,7 @@ from job_radar.client import (
     ClientFranceTravail,
     ErreurAuthentification,
     ErreurRecherche,
+    decrire_recherche,
     normaliser_mot_cle,
     reduire_offre,
 )
@@ -31,6 +32,7 @@ from job_radar.tri import (
     CODES_ROME_DEFAUT,
     DRAPEAUX_BONUS,
     DRAPEAUX_ELIMINATOIRES,
+    EXPERIENCE_MAX_DEFAUT,
     TAILLE_LOT_DEFAUT,
     VERDICTS_RETENUS,
     ErreurTri,
@@ -51,7 +53,12 @@ class ErreurConfiguration(RuntimeError):
 
 
 def charger_config(chemin: str | Path = CHEMIN_CONFIG_DEFAUT) -> dict[str, Any]:
-    """Charge et valide les critères de recherche depuis un fichier TOML."""
+    """Charge et valide les critères de recherche depuis un fichier TOML.
+
+    La section ``[recherche]`` décrit une recherche ; ``[[recherche]]``, répétée,
+    en décrit plusieurs, par exemple un rayon autour d'une commune et une recherche
+    par mots-clés sur toute la France.
+    """
     chemin = Path(chemin)
     if not chemin.exists():
         raise ErreurConfiguration(f"Fichier de configuration introuvable : {chemin}")
@@ -59,34 +66,20 @@ def charger_config(chemin: str | Path = CHEMIN_CONFIG_DEFAUT) -> dict[str, Any]:
     with chemin.open("rb") as fichier:
         brut = tomllib.load(fichier)
 
-    recherche = brut.get("recherche", brut)
-    mots_cles_brut = recherche.get("mots_cles") or []
-    # Une liste de départements vide est volontaire : la recherche porte alors sur
-    # toute la France, avec une seule requête par mot-clé.
-    departements = recherche.get("departements") or []
-    if not mots_cles_brut:
-        raise ErreurConfiguration(
-            f"{chemin} doit définir au moins un mot-clé dans la section [recherche]."
-        )
+    brutes = brut.get("recherche", brut)
+    if isinstance(brutes, dict):
+        brutes = [brutes]
 
-    try:
-        mots_cles = [normaliser_mot_cle(str(mot)) for mot in mots_cles_brut]
-    except ValueError as erreur:
-        raise ErreurConfiguration(f"{chemin} : {erreur}") from erreur
-
-    publiee_depuis = int(recherche.get("publiee_depuis", 7))
-    if publiee_depuis not in PUBLIEE_DEPUIS_VALIDES:
-        raise ErreurConfiguration(
-            f"publiee_depuis doit valoir l'une de {PUBLIEE_DEPUIS_VALIDES}, reçu {publiee_depuis}."
-        )
-
+    recherches = [_lire_recherche(bloc, chemin) for bloc in brutes]
     tri = brut.get("tri") or {}
+    chemins = brut.get("chemins") or {}
 
     return {
-        "mots_cles": mots_cles,
-        "departements": [str(dept) for dept in departements],
-        "publiee_depuis": publiee_depuis,
-        "pages_max": max(1, int(recherche.get("pages_max", 1))),
+        "recherches": recherches,
+        "chemins": {
+            cle: Path(str(chemins[cle])).expanduser() if chemins.get(cle) else None
+            for cle in ("base", "nouvelles", "selection")
+        },
         "tri": {
             # Le fichier de critères vit hors du dépôt : il est personnel.
             "criteres": str(tri["criteres"]) if tri.get("criteres") else None,
@@ -96,8 +89,57 @@ def charger_config(chemin: str | Path = CHEMIN_CONFIG_DEFAUT) -> dict[str, Any]:
             "exclure_rqth": bool(tri.get("exclure_rqth", False)),
             # Liste vide = pas de filtre sur les codes ROME.
             "codes_rome": [str(code) for code in tri.get("codes_rome", CODES_ROME_DEFAUT)],
+            "experience_max": max(0, int(tri.get("experience_max", EXPERIENCE_MAX_DEFAUT))),
         },
     }
+
+
+def _lire_recherche(bloc: dict[str, Any], chemin: Path) -> dict[str, Any]:
+    """Valide une recherche : ses critères, sa zone et sa profondeur de pagination."""
+    mots_cles_brut = bloc.get("mots_cles") or []
+    # Une liste de départements vide est volontaire : la recherche porte alors sur
+    # toute la France, avec une seule requête par mot-clé.
+    departements = [str(dept) for dept in bloc.get("departements") or []]
+    commune = str(bloc["commune"]) if bloc.get("commune") else None
+
+    if not mots_cles_brut and commune is None:
+        raise ErreurConfiguration(
+            f"{chemin} : chaque recherche doit définir au moins un mot-clé ou une commune "
+            "(code INSEE) — sans quoi elle ramènerait toutes les offres de France."
+        )
+
+    try:
+        mots_cles = [normaliser_mot_cle(str(mot)) for mot in mots_cles_brut]
+    except ValueError as erreur:
+        raise ErreurConfiguration(f"{chemin} : {erreur}") from erreur
+
+    publiee_depuis = int(bloc.get("publiee_depuis", 7))
+    if publiee_depuis not in PUBLIEE_DEPUIS_VALIDES:
+        raise ErreurConfiguration(
+            f"publiee_depuis doit valoir l'une de {PUBLIEE_DEPUIS_VALIDES}, reçu {publiee_depuis}."
+        )
+
+    distance = bloc.get("distance")
+    if distance is not None and commune is None:
+        raise ErreurConfiguration(
+            f"{chemin} : « distance » ne veut rien dire sans « commune » (code INSEE)."
+        )
+    if distance is not None and int(distance) < 0:
+        raise ErreurConfiguration(f"{chemin} : « distance » doit être positive ou nulle.")
+
+    return {
+        "mots_cles": mots_cles,
+        "departements": departements,
+        "commune": commune,
+        "distance": int(distance) if distance is not None else None,
+        "publiee_depuis": publiee_depuis,
+        "pages_max": max(1, int(bloc.get("pages_max", 1))),
+    }
+
+
+def resoudre_chemin(valeur: Path | None, config: dict[str, Any], cle: str, defaut: Path) -> Path:
+    """Chemin retenu : l'option de la ligne de commande, sinon la config, sinon le défaut."""
+    return valeur or config["chemins"][cle] or defaut
 
 
 def lire_identifiants() -> tuple[str, str]:
@@ -118,42 +160,50 @@ def collecter(
     config: dict[str, Any],
     bavard: bool = True,
 ) -> list[dict[str, Any]]:
-    """Lance une recherche par couple mot-clé / département et dédoublonne par identifiant.
+    """Lance toutes les recherches de la configuration et dédoublonne par identifiant.
 
-    Sans département configuré, une seule recherche par mot-clé est lancée sur toute
-    la France. Une recherche en échec est signalée sans interrompre les suivantes ;
-    un refus d'authentification, lui, remonte immédiatement (`ErreurAuthentification`).
+    Chaque recherche se décline en une requête par couple mot-clé / département — ou
+    une seule requête quand ni l'un ni l'autre n'est précisé, par exemple autour d'une
+    commune. Une recherche en échec est signalée sans interrompre les suivantes ; un
+    refus d'authentification, lui, remonte immédiatement (`ErreurAuthentification`).
     """
     offres: dict[str, dict[str, Any]] = {}
-    # `None` = pas de filtre géographique, donc une requête pour toute la France.
-    zones: list[str | None] = list(config["departements"]) or [None]
 
-    for mot in config["mots_cles"]:
-        for departement in zones:
-            for page in range(config["pages_max"]):
-                try:
-                    resultats = client.rechercher(
-                        mots_cles=mot,
-                        departement=departement,
-                        publiee_depuis=config["publiee_depuis"],
-                        page=page,
-                    )
-                except ErreurRecherche as erreur:
-                    print(f"  ! {erreur}", file=sys.stderr)
-                    break
+    for recherche in config["recherches"]:
+        # `None` = critère absent, donc pas de filtre sur ce point.
+        mots: list[str | None] = list(recherche["mots_cles"]) or [None]
+        zones: list[str | None] = list(recherche["departements"]) or [None]
 
-                if bavard:
-                    zone = f"dép. {departement}" if departement else "France entière"
-                    print(f"  {mot!r} / {zone} / page {page + 1} : {len(resultats)} offres")
+        for mot in mots:
+            for departement in zones:
+                for page in range(recherche["pages_max"]):
+                    try:
+                        resultats = client.rechercher(
+                            mots_cles=mot,
+                            departement=departement,
+                            commune=recherche["commune"],
+                            distance=recherche["distance"],
+                            publiee_depuis=recherche["publiee_depuis"],
+                            page=page,
+                        )
+                    except ErreurRecherche as erreur:
+                        print(f"  ! {erreur}", file=sys.stderr)
+                        break
 
-                for brute in resultats:
-                    offre = reduire_offre(brute)
-                    if offre["id"]:
-                        offres.setdefault(offre["id"], offre)
+                    if bavard:
+                        description = decrire_recherche(
+                            mot, departement, recherche["commune"], recherche["distance"]
+                        )
+                        print(f"  {description} / page {page + 1} : {len(resultats)} offres")
 
-                # Page incomplète : inutile de demander la suivante.
-                if len(resultats) < TAILLE_PAGE:
-                    break
+                    for brute in resultats:
+                        offre = reduire_offre(brute)
+                        if offre["id"]:
+                            offres.setdefault(offre["id"], offre)
+
+                    # Page incomplète : inutile de demander la suivante.
+                    if len(resultats) < TAILLE_PAGE:
+                        break
 
     return list(offres.values())
 
@@ -197,9 +247,9 @@ def construire_parseur() -> argparse.ArgumentParser:
     )
     commun.add_argument(
         "--base",
-        default=CHEMIN_BASE_DEFAUT,
+        default=None,
         type=Path,
-        help=f"base SQLite de l'historique (défaut : {CHEMIN_BASE_DEFAUT})",
+        help=f"base SQLite de l'historique (défaut : [chemins].base, sinon {CHEMIN_BASE_DEFAUT})",
     )
 
     collecte = sous_parseurs.add_parser(
@@ -209,9 +259,10 @@ def construire_parseur() -> argparse.ArgumentParser:
     )
     collecte.add_argument(
         "--sortie",
-        default=CHEMIN_SORTIE_DEFAUT,
+        default=None,
         type=Path,
-        help=f"fichier JSON des nouvelles offres (défaut : {CHEMIN_SORTIE_DEFAUT})",
+        help="fichier JSON des nouvelles offres (défaut : [chemins].nouvelles, "
+        f"sinon {CHEMIN_SORTIE_DEFAUT})",
     )
     collecte.add_argument(
         "--sans-historique",
@@ -231,9 +282,10 @@ def construire_parseur() -> argparse.ArgumentParser:
     )
     tri.add_argument(
         "--sortie",
-        default=CHEMIN_SELECTION_DEFAUT,
+        default=None,
         type=Path,
-        help=f"fichier JSON de la sélection (défaut : {CHEMIN_SELECTION_DEFAUT})",
+        help="fichier JSON de la sélection (défaut : [chemins].selection, "
+        f"sinon {CHEMIN_SELECTION_DEFAUT})",
     )
     tri.add_argument(
         "--limite",
@@ -308,16 +360,20 @@ def commande_collecter(args: argparse.Namespace, config: dict[str, Any]) -> int:
 
     bavard = not args.silencieux
     if bavard:
-        zone = (
-            f"{len(config['departements'])} département(s)"
-            if config["departements"]
-            else "France entière"
-        )
         print(
-            f"Recherche : {len(config['mots_cles'])} mot(s)-clé × {zone}, "
-            f"offres publiées depuis {config['publiee_depuis']} jour(s), "
-            "triées par date de création décroissante"
+            f"{len(config['recherches'])} recherche(s), "
+            "offres triées par date de création décroissante :"
         )
+        for recherche in config["recherches"]:
+            mots = recherche["mots_cles"] or [None]
+            zones = recherche["departements"] or [None]
+            description = decrire_recherche(
+                mots[0], zones[0], recherche["commune"], recherche["distance"]
+            )
+            print(
+                f"  {len(mots) * len(zones)} requête(s) — {description}, "
+                f"publiées depuis {recherche['publiee_depuis']} jour(s)"
+            )
 
     client = ClientFranceTravail(client_id, client_secret)
     try:
@@ -331,8 +387,11 @@ def commande_collecter(args: argparse.Namespace, config: dict[str, Any]) -> int:
         )
         return 3
 
+    base = resoudre_chemin(args.base, config, "base", CHEMIN_BASE_DEFAUT)
+    sortie = resoudre_chemin(args.sortie, config, "nouvelles", CHEMIN_SORTIE_DEFAUT)
+
     actualisees = 0
-    with Historique(args.base) as historique:
+    with Historique(base) as historique:
         nouvelles = historique.filtrer_nouvelles(offres)
         if not args.sans_historique:
             historique.enregistrer(nouvelles)
@@ -345,8 +404,8 @@ def commande_collecter(args: argparse.Namespace, config: dict[str, Any]) -> int:
         print(f"{actualisees} offre(s) déjà connue(s) ont été actualisée(s).")
     if nouvelles:
         afficher(nouvelles)
-        ecrire_json(nouvelles, args.sortie)
-        print(f"\nDétail complet écrit dans {args.sortie}")
+        ecrire_json(nouvelles, sortie)
+        print(f"\nDétail complet écrit dans {sortie}")
         print("Triez-les avec : job-radar trier")
 
     return 0
@@ -386,7 +445,10 @@ def commande_trier(args: argparse.Namespace, config: dict[str, Any]) -> int:
         print(f"Erreur : {erreur}", file=sys.stderr)
         return 2
 
-    with Historique(args.base) as historique:
+    base = resoudre_chemin(args.base, config, "base", CHEMIN_BASE_DEFAUT)
+    sortie = resoudre_chemin(args.sortie, config, "selection", CHEMIN_SELECTION_DEFAUT)
+
+    with Historique(base) as historique:
         if args.importer_json is not None:
             complete = historique.importer_contenu(_lire_json(args.importer_json))
             console.print(f"{complete} offre(s) complétée(s) depuis {args.importer_json}.")
@@ -425,6 +487,7 @@ def commande_trier(args: argparse.Namespace, config: dict[str, Any]) -> int:
             a_trier,
             exclure_rqth=reglages["exclure_rqth"],
             codes_rome=reglages["codes_rome"],
+            experience_max=reglages["experience_max"],
         )
         sans_rome = sum(1 for offre in a_trier if not (offre.get("rome") or "").strip())
         if sans_rome and reglages["codes_rome"]:
@@ -473,6 +536,7 @@ def commande_trier(args: argparse.Namespace, config: dict[str, Any]) -> int:
             criteres,
             retenues,
             taille_lot=reglages["taille_lot"],
+            experience_max=reglages["experience_max"],
             rappel_debut=debut_de_lot,
             rappel_fin=fin_de_lot,
         )
@@ -488,11 +552,11 @@ def commande_trier(args: argparse.Namespace, config: dict[str, Any]) -> int:
     classees = fusionner(retenues, resultats)
     afficher_tri(console, classees)
 
-    ecrire_json(selection, args.sortie)
+    ecrire_json(selection, sortie)
     retenues_du_passage = sum(1 for o in classees if o["verdict"] in VERDICTS_RETENUS)
     console.print(
         f"\n{retenues_du_passage} offre(s) retenue(s) sur {len(classees)} triée(s) "
-        f"dans ce passage ; {len(selection)} au total → {args.sortie}"
+        f"dans ce passage ; {len(selection)} au total → {sortie}"
     )
     return 1 if erreurs and not resultats else 0
 

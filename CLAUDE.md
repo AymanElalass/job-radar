@@ -102,6 +102,22 @@ ce fichier. Aucun autre module n'importe `subprocess`.
   versionner ni recopier son contenu dans le dépôt : `criteres.example.md` est la seule version
   publique.
 
+## Modes de veille
+
+Un mode = un fichier de configuration. `config.toml` est la veille informatique,
+`config-argeles.toml` une veille large autour d'Argelès-sur-Mer. Chacun a sa base, sa sélection
+et ses critères : rien ne se mélange, et **modifier un mode ne doit pas toucher l'autre**.
+
+- `[recherche]` décrit une recherche, `[[recherche]]` répétée en décrit plusieurs. Chaque bloc
+  porte ses propres `mots_cles`, `departements`, `commune`, `distance`, `publiee_depuis` et
+  `pages_max` ; `charger_config` renvoie toujours une liste dans `config["recherches"]`.
+- Un mot-clé n'est obligatoire que si aucune commune n'est donnée : sans l'un ni l'autre, la
+  recherche ramènerait toutes les offres de France, et la configuration est refusée.
+- `[chemins]` (base, nouvelles, selection) fixe les fichiers du mode ; les options `--base` et
+  `--sortie` restent prioritaires (`resoudre_chemin`).
+- `[tri].experience_max` règle la sévérité sur l'expérience : au-delà, écartée ; entre
+  `SEUIL_EXPERIENCE_ANNEES` et ce plafond, gardée avec le drapeau `experience`.
+
 ## Rappels sur l'API
 
 - Jeton : `POST https://entreprise.francetravail.fr/connexion/oauth2/access_token?realm=/partenaire`,
@@ -114,6 +130,9 @@ ce fichier. Aucun autre module n'importe `subprocess`.
   les offres les plus récentes.
 - `departement` est facultatif : omis, la recherche porte sur toute la France. Une liste
   `departements` vide dans `config.toml` est donc valide et déclenche ce mode.
+- `commune` est un code INSEE (jusqu'à 5, séparés par des virgules) et `distance` le rayon en
+  kilomètres autour d'elle : 10 par défaut côté API, `0` pour la commune seule. L'API remonte
+  les offres jusqu'à 30 % au-delà du rayon demandé. `motsCles` n'est pas obligatoire.
 - `motsCles` : 7 mots-clés maximum séparés par des virgules, chacun d'au moins 2 caractères,
   caractères autorisés `[a-zA-Z0-9]`, espace et ``@#$%^&+./-"``. Une expression de plusieurs
   mots est valide et part telle quelle ; la virgule est refusée côté `job-radar` car elle

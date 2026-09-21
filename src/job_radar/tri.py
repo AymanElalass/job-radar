@@ -26,8 +26,15 @@ LONGUEUR_DESCRIPTION = 800
 #: Seuls champs transmis au LLM : de quoi juger l'offre, rien de plus.
 CHAMPS_ENVOYES = ("intitule", "entreprise", "lieu", "contrat", "experience")
 
-#: Années d'expérience à partir desquelles une offre est écartée sans LLM.
+#: Années d'expérience à partir desquelles une exigence mérite d'être signalée.
 SEUIL_EXPERIENCE_ANNEES = 3
+
+#: Années d'expérience tolérées avant d'écarter l'offre. Au-delà, elle est écartée
+#: sans appel au LLM ; entre :data:`SEUIL_EXPERIENCE_ANNEES` et cette valeur, elle
+#: est conservée avec le drapeau ``experience``. La valeur par défaut écarte donc
+#: dès trois ans, et le drapeau ne sert pas. Une veille plus large peut relever ce
+#: plafond pour garder les offres et se contenter du signalement.
+EXPERIENCE_MAX_DEFAUT = SEUIL_EXPERIENCE_ANNEES - 1
 
 #: Codes ROME retenus par défaut, vérifiés dans le référentiel de France Travail :
 #: « M18 » est la famille « Systèmes d'information et de télécommunication »
@@ -52,11 +59,12 @@ DRAPEAUX_LLM = (
 
 #: Drapeaux posés par Python, sans LLM, parce qu'ils sont vérifiables mécaniquement.
 #:
-#: ``rqth`` est le seul qui reste : ``permis``, ``bac5`` et ``experience`` écartent
-#: désormais l'offre au pré-filtre, ils n'ont donc plus à être signalés sur une offre
-#: retenue. Le LLM peut toujours les poser sur des formulations que ces règles ne
+#: ``permis`` et ``bac5`` écartent l'offre au pré-filtre : ils n'ont plus à être
+#: signalés. ``experience`` ne figure ici que lorsque le plafond toléré dépasse le
+#: seuil de signalement : l'offre est alors gardée, mais l'exigence reste visible.
+#: Le LLM peut toujours poser ces drapeaux sur des formulations que ces règles ne
 #: couvrent pas, et la règle de verdict s'applique alors.
-DRAPEAUX_DETERMINISTES = ("rqth",)
+DRAPEAUX_DETERMINISTES = ("rqth", "experience")
 
 #: Tous les drapeaux acceptés, d'où qu'ils viennent.
 DRAPEAUX_VALIDES = (*DRAPEAUX_LLM, *DRAPEAUX_DETERMINISTES)
@@ -82,7 +90,13 @@ MARQUEURS_RQTH_URL = ("handicap-job.com",)
 MOTIF_LIBERALE = "profession libérale (freelance)"
 MOTIF_ROME = "hors des codes ROME retenus"
 MOTIF_TJM = "rémunéré au jour (TJM, freelance)"
-MOTIF_EXPERIENCE = f"{SEUIL_EXPERIENCE_ANNEES} ans d'expérience ou plus exigés"
+
+
+def motif_experience(experience_max: int = EXPERIENCE_MAX_DEFAUT) -> str:
+    """Motif d'écartement, qui dit la durée réellement tolérée."""
+    return f"plus de {experience_max} ans d'expérience exigés"
+
+
 MOTIF_STAGE = "stage (convention impossible, diplôme déjà obtenu)"
 MOTIF_PERMIS = "permis de conduire exigé"
 MOTIF_BAC5 = "bac+5 ou diplôme d'ingénieur exigé"
@@ -326,7 +340,7 @@ def exige_bac5(offre: dict[str, Any]) -> bool:
     return False
 
 
-def exige_experience_dans_le_texte(offre: dict[str, Any]) -> bool:
+def annees_dans_le_texte(offre: dict[str, Any]) -> int | None:
     """Vrai si la description réclame :data:`SEUIL_EXPERIENCE_ANNEES` ans au minimum.
 
     Complète :func:`exige_experience_longue`, qui ne lit que le libellé de l'API :
@@ -338,6 +352,7 @@ def exige_experience_dans_le_texte(offre: dict[str, Any]) -> bool:
     et « au moins X ans », avec X exprimé en années.
     """
     texte = _texte_offre(offre, "description")
+    exigences = []
 
     for correspondance in REGEX_ANNEES_MINIMUM.finditer(texte):
         annees = _premiere_annee(correspondance)
@@ -347,8 +362,29 @@ def exige_experience_dans_le_texte(offre: dict[str, Any]) -> bool:
         phrase = texte[correspondance.start() : correspondance.end() + 40]
         if REGEX_EXPERIENCE_FACULTATIVE.search(phrase):
             continue
-        return True
-    return False
+        exigences.append(annees)
+
+    return max(exigences) if exigences else None
+
+
+def exige_experience_dans_le_texte(offre: dict[str, Any]) -> bool:
+    """Vrai si la description réclame :data:`SEUIL_EXPERIENCE_ANNEES` ans ou plus."""
+    return annees_dans_le_texte(offre) is not None
+
+
+def annees_exigees(offre: dict[str, Any]) -> int | None:
+    """Durée d'expérience demandée, la plus longue trouvée.
+
+    Deux sources complémentaires : le libellé de l'API (« 3 An(s) ») et la description
+    (« 5 ans minimum »), une annonce affichant souvent « débutant accepté » avant de
+    réclamer cinq ans en clair.
+    """
+    durees = [
+        duree
+        for duree in (annees_experience(offre.get("experience")), annees_dans_le_texte(offre))
+        if duree is not None
+    ]
+    return max(durees) if durees else None
 
 
 def _premiere_annee(correspondance: re.Match[str]) -> int | None:
@@ -364,10 +400,22 @@ def est_remunere_au_jour(offre: dict[str, Any]) -> bool:
     return REGEX_TJM.search(_texte_offre(offre, "salaire", "description")) is not None
 
 
-def drapeaux_deterministes(offre: dict[str, Any]) -> list[str]:
-    """Drapeaux que Python pose seul, dans l'ordre de :data:`DRAPEAUX_DETERMINISTES`."""
-    detections = {"rqth": est_rqth}
-    return [drapeau for drapeau in DRAPEAUX_DETERMINISTES if detections[drapeau](offre)]
+def drapeaux_deterministes(
+    offre: dict[str, Any], experience_max: int = EXPERIENCE_MAX_DEFAUT
+) -> list[str]:
+    """Drapeaux que Python pose seul, dans l'ordre de :data:`DRAPEAUX_DETERMINISTES`.
+
+    Une offre retenue malgré une expérience demandée porte le drapeau ``experience`` :
+    elle n'est pas écartée, mais l'exigence reste sous les yeux.
+    """
+    annees = annees_exigees(offre)
+    detections = {
+        "rqth": est_rqth(offre),
+        # Entre le seuil de signalement et le plafond toléré : l'offre est gardée,
+        # mais l'exigence reste sous les yeux. Au-delà, elle a déjà été écartée.
+        "experience": annees is not None and SEUIL_EXPERIENCE_ANNEES <= annees <= experience_max,
+    }
+    return [drapeau for drapeau in DRAPEAUX_DETERMINISTES if detections[drapeau]]
 
 
 #: Mentions de genre à retirer d'un intitulé avant comparaison.
@@ -410,6 +458,7 @@ def prefiltrer(
     offres: Iterable[dict[str, Any]],
     exclure_rqth: bool = False,
     codes_rome: Sequence[str] = CODES_ROME_DEFAUT,
+    experience_max: int = EXPERIENCE_MAX_DEFAUT,
 ) -> tuple[list[dict[str, Any]], list[tuple[dict[str, Any], str]]]:
     """Sépare les offres à envoyer au LLM de celles écartées, avec leur motif.
 
@@ -445,8 +494,9 @@ def prefiltrer(
             continue
         # Le libellé de l'API et la description se complètent : beaucoup d'annonces
         # affichent « débutant accepté » puis réclament « 5 ans minimum » en clair.
-        if exige_experience_longue(offre) or exige_experience_dans_le_texte(offre):
-            ecartees.append((offre, MOTIF_EXPERIENCE))
+        annees = annees_exigees(offre)
+        if annees is not None and annees > experience_max:
+            ecartees.append((offre, motif_experience(experience_max)))
             continue
         if est_remunere_au_jour(offre):
             ecartees.append((offre, MOTIF_TJM))
@@ -676,7 +726,9 @@ def _deux_lignes(resume: Any) -> str:
 
 
 def ajouter_drapeaux_deterministes(
-    lot: list[dict[str, Any]], resultats: list[dict[str, Any]]
+    lot: list[dict[str, Any]],
+    resultats: list[dict[str, Any]],
+    experience_max: int = EXPERIENCE_MAX_DEFAUT,
 ) -> list[dict[str, Any]]:
     """Ajoute aux résultats les drapeaux que Python sait poser seul.
 
@@ -689,7 +741,7 @@ def ajouter_drapeaux_deterministes(
         offre = par_id.get(resultat["id"])
         if offre is None:
             continue
-        for drapeau in drapeaux_deterministes(offre):
+        for drapeau in drapeaux_deterministes(offre, experience_max):
             if drapeau not in resultat["drapeaux"]:
                 resultat["drapeaux"].append(drapeau)
 
@@ -710,7 +762,12 @@ def appliquer_regle_verdict(resultats: list[dict[str, Any]]) -> list[dict[str, A
     return resultats
 
 
-def trier_lot(client: ClientLLM, criteres: str, lot: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def trier_lot(
+    client: ClientLLM,
+    criteres: str,
+    lot: list[dict[str, Any]],
+    experience_max: int = EXPERIENCE_MAX_DEFAUT,
+) -> list[dict[str, Any]]:
     """Fait noter un lot par le LLM, avec une seule nouvelle tentative si besoin."""
     prompt = construire_prompt(criteres, lot)
     ids = [offre["id"] for offre in lot]
@@ -722,7 +779,7 @@ def trier_lot(client: ClientLLM, criteres: str, lot: list[dict[str, Any]]) -> li
         # puis on abandonne ce lot pour ne pas bloquer les suivants.
         notees = valider_reponse(client(prompt), ids)
 
-    return appliquer_regle_verdict(ajouter_drapeaux_deterministes(lot, notees))
+    return appliquer_regle_verdict(ajouter_drapeaux_deterministes(lot, notees, experience_max))
 
 
 def trier(
@@ -730,6 +787,7 @@ def trier(
     criteres: str,
     offres: list[dict[str, Any]],
     taille_lot: int = TAILLE_LOT_DEFAUT,
+    experience_max: int = EXPERIENCE_MAX_DEFAUT,
     rappel_debut: Callable[[int, int, int], None] | None = None,
     rappel_fin: Callable[[int, int, float, int, str | None], None] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
@@ -752,7 +810,7 @@ def trier(
         notees: list[dict[str, Any]] = []
         motif: str | None = None
         try:
-            notees = trier_lot(client, criteres, lot)
+            notees = trier_lot(client, criteres, lot, experience_max)
         except (ErreurTri, ErreurLLM) as erreur:
             # Un lot abandonné (JSON inexploitable, délai dépassé, CLI en échec)
             # est signalé, et les lots suivants partent quand même.
