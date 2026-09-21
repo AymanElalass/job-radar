@@ -10,6 +10,8 @@ OFFRE_BRUTE = {
     "lieuTravail": {"libelle": "75 - Paris (Dept.)", "codePostal": "75001"},
     "entreprise": {"nom": "ACME", "description": "PME de 40 personnes"},
     "typeContrat": "CDI",
+    "romeCode": "M1805",
+    "romeLibelle": "Études et développement informatique",
     "typeContratLibelle": "Contrat à durée indéterminée",
     "experienceLibelle": "2 An(s)",
     "salaire": {"libelle": "Annuel de 45000.0 Euros à 55000.0 Euros sur 12 mois"},
@@ -35,6 +37,8 @@ def test_reduction_conserve_les_champs_utiles():
         "contrat": "Contrat à durée indéterminée",
         "salaire": "Annuel de 45000.0 Euros à 55000.0 Euros sur 12 mois",
         "experience": "2 An(s)",
+        "rome": "M1805",
+        "rome_libelle": "Études et développement informatique",
         "alternance": False,
         "date_creation": "2026-09-15T09:12:41.000Z",
         "url": "https://candidat.francetravail.fr/offres/recherche/detail/190QJXZ",
@@ -56,6 +60,7 @@ def test_reduction_tolere_une_offre_incomplete():
     assert offre["id"] == "ABC123"
     assert offre["intitule"] is None
     assert offre["lieu"] is None
+    assert offre["rome"] is None
     assert offre["entreprise"] is None
     assert offre["url"] is None
     assert offre["alternance"] is False

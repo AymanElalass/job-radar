@@ -36,9 +36,14 @@ ce fichier. Aucun autre module n'importe `subprocess`.
 ## Tri par LLM (étape 2)
 
 - **Pré-filtre d'abord, LLM ensuite.** Tout ce qui peut être écarté gratuitement en Python doit
-  l'être : profession libérale, taux journalier (`est_remunere_au_jour`), stage (`est_stage`),
-  3 ans d'expérience ou plus exigés (`SEUIL_EXPERIENCE_ANNEES`), offres RQTH si `exclure_rqth`,
-  doublons. Le nombre d'offres écartées et leur motif sont toujours affichés.
+  l'être : code ROME hors de `codes_rome`, profession libérale, taux journalier
+  (`est_remunere_au_jour`), stage (`est_stage`), 3 ans d'expérience ou plus exigés — libellé de
+  l'API (`exige_experience_longue`) **et** description entière (`exige_experience_dans_le_texte`,
+  car l'exigence arrive souvent bien après les 800 caractères envoyés au modèle) —, offres RQTH
+  si `exclure_rqth`, doublons. Le nombre d'offres écartées et leur motif sont toujours affichés.
+- **Un champ non conservé par `reduire_offre` ne peut pas être filtré** : le filtre ROME est resté
+  inerte sur les 881 offres déjà collectées, faute de `romeCode` dans la base. Une règle nouvelle
+  qui s'appuie sur un champ absent doit conserver l'offre plutôt que l'écarter, et le dire.
 - **Deux clés de dédoublonnage** (`cles_doublon`) : intitulé normalisé + entreprise, et intitulé
   normalisé + ville. La seconde attrape la même annonce diffusée par des intermédiaires
   différents, que la première laissait passer.

@@ -39,6 +39,12 @@ taille_lot = 20
 # et les lots suivants partent quand même.
 delai_max = 180
 
+# Codes ROME retenus : un préfixe garde toute la famille, un code complet une
+# seule fiche. M18 = systèmes d'information et de télécommunication (M1801 à
+# M1810), K2107 = enseignement général du second degré, K2111 = formation
+# professionnelle. Liste vide = pas de filtre.
+codes_rome = ["M18", "K2107", "K2111"]
+
 # Offres des canaux réservés aux travailleurs handicapés (« Talents Handicap »,
 # handicap-job.com) : true les écarte au pré-filtre, false les conserve avec le
 # drapeau rqth.

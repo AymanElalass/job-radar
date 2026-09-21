@@ -28,6 +28,7 @@ from job_radar.client import (
 from job_radar.llm import DELAI_MAX_DEFAUT, MODELE_DEFAUT, creer_client
 from job_radar.stockage import CHEMIN_BASE_DEFAUT, Historique
 from job_radar.tri import (
+    CODES_ROME_DEFAUT,
     DRAPEAUX_BONUS,
     DRAPEAUX_ELIMINATOIRES,
     TAILLE_LOT_DEFAUT,
@@ -93,6 +94,8 @@ def charger_config(chemin: str | Path = CHEMIN_CONFIG_DEFAUT) -> dict[str, Any]:
             "taille_lot": max(1, int(tri.get("taille_lot", TAILLE_LOT_DEFAUT))),
             "delai_max": max(1, int(tri.get("delai_max", DELAI_MAX_DEFAUT))),
             "exclure_rqth": bool(tri.get("exclure_rqth", False)),
+            # Liste vide = pas de filtre sur les codes ROME.
+            "codes_rome": [str(code) for code in tri.get("codes_rome", CODES_ROME_DEFAUT)],
         },
     }
 
@@ -412,7 +415,18 @@ def commande_trier(args: argparse.Namespace, config: dict[str, Any]) -> int:
                 console.print("Aucune offre à trier : tout est déjà passé au tri.")
             return 0
 
-        retenues, ecartees = prefiltrer(a_trier, exclure_rqth=reglages["exclure_rqth"])
+        retenues, ecartees = prefiltrer(
+            a_trier,
+            exclure_rqth=reglages["exclure_rqth"],
+            codes_rome=reglages["codes_rome"],
+        )
+        sans_rome = sum(1 for offre in a_trier if not (offre.get("rome") or "").strip())
+        if sans_rome and reglages["codes_rome"]:
+            console.print(
+                f"[yellow]{sans_rome} offre(s) sans code ROME échappent au filtre : "
+                "elles ont été collectées avant que ce champ soit conservé. "
+                "Une nouvelle collecte le renseignera.[/yellow]"
+            )
         _afficher_prefiltre(console, len(a_trier), retenues, ecartees)
 
         if not retenues:

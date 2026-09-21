@@ -11,7 +11,7 @@ import json
 import re
 import time
 import unicodedata
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +29,15 @@ CHAMPS_ENVOYES = ("intitule", "entreprise", "lieu", "contrat", "experience")
 #: Années d'expérience à partir desquelles une offre est écartée sans LLM.
 SEUIL_EXPERIENCE_ANNEES = 3
 
+#: Codes ROME retenus par défaut, vérifiés dans le référentiel de France Travail :
+#: « M18 » est la famille « Systèmes d'information et de télécommunication »
+#: (M1801 à M1810 : administration, expertise et support, direction, réseaux de
+#: télécoms, études et développement, conseil et maîtrise d'ouvrage, exploitation,
+#: information géographique et météorologique, production et exploitation),
+#: « K2107 » l'enseignement général du second degré et « K2111 » la formation
+#: professionnelle. Un préfixe retient toute la famille, un code complet une seule fiche.
+CODES_ROME_DEFAUT = ("M18", "K2107", "K2111")
+
 #: Drapeaux que le LLM peut poser sur une offre.
 DRAPEAUX_LLM = (
     "permis",
@@ -44,7 +53,11 @@ DRAPEAUX_LLM = (
 #: Drapeaux posés par Python, sans LLM, parce qu'ils sont vérifiables mécaniquement.
 #: Le LLM peut poser les mêmes (sauf ``rqth``) sur des formulations que ces règles
 #: ne couvrent pas : les deux sources s'additionnent.
-DRAPEAUX_DETERMINISTES = ("rqth", "permis", "bac5", "experience")
+#:
+#: ``experience`` n'y figure pas : une durée minimale chiffrée dans la description
+#: écarte l'offre au pré-filtre (voir :func:`exige_experience_dans_le_texte`), elle
+#: n'a donc pas à être signalée sur une offre retenue.
+DRAPEAUX_DETERMINISTES = ("rqth", "permis", "bac5")
 
 #: Tous les drapeaux acceptés, d'où qu'ils viennent.
 DRAPEAUX_VALIDES = (*DRAPEAUX_LLM, *DRAPEAUX_DETERMINISTES)
@@ -68,6 +81,7 @@ MARQUEURS_RQTH_ENTREPRISE = ("talents handicap",)
 MARQUEURS_RQTH_URL = ("handicap-job.com",)
 
 MOTIF_LIBERALE = "profession libérale (freelance)"
+MOTIF_ROME = "hors des codes ROME retenus"
 MOTIF_TJM = "rémunéré au jour (TJM, freelance)"
 MOTIF_EXPERIENCE = f"{SEUIL_EXPERIENCE_ANNEES} ans d'expérience ou plus exigés"
 MOTIF_STAGE = "stage (convention impossible, diplôme déjà obtenu)"
@@ -135,6 +149,23 @@ def exige_experience_longue(offre: dict[str, Any]) -> bool:
     """Vrai si l'offre demande explicitement :data:`SEUIL_EXPERIENCE_ANNEES` ans ou plus."""
     annees = annees_experience(offre.get("experience"))
     return annees is not None and annees >= SEUIL_EXPERIENCE_ANNEES
+
+
+def code_rome_retenu(offre: dict[str, Any], codes: Sequence[str] = CODES_ROME_DEFAUT) -> bool:
+    """Vrai si le code ROME de l'offre appartient à l'un des codes ou familles retenus.
+
+    Une offre sans code ROME est conservée : les offres collectées avant que ce champ
+    ne soit gardé n'en ont pas, et un filtre ne doit pas écarter ce qu'il ne sait pas
+    juger. Une liste de codes vide désactive le filtre.
+    """
+    if not codes:
+        return True
+
+    rome = (offre.get("rome") or "").strip().upper()
+    if not rome:
+        return True
+
+    return any(rome.startswith(code.strip().upper()) for code in codes)
 
 
 def est_rqth(offre: dict[str, Any]) -> bool:
@@ -279,6 +310,11 @@ def exige_experience_dans_le_texte(offre: dict[str, Any]) -> bool:
 
     Complète :func:`exige_experience_longue`, qui ne lit que le libellé de l'API :
     beaucoup d'annonces affichent « débutant accepté » puis demandent « 5 ans minimum ».
+
+    La description est lue **en entier** : l'exigence se trouve souvent au-delà des
+    :data:`LONGUEUR_DESCRIPTION` premiers caractères, qui ne bornent que l'extrait
+    envoyé au modèle. Les tournures couvertes sont « X ans minimum », « minimum X ans »
+    et « au moins X ans », avec X exprimé en années.
     """
     texte = _texte_offre(offre, "description")
 
@@ -300,7 +336,6 @@ def drapeaux_deterministes(offre: dict[str, Any]) -> list[str]:
         "rqth": est_rqth,
         "permis": exige_permis,
         "bac5": exige_bac5,
-        "experience": exige_experience_dans_le_texte,
     }
     return [drapeau for drapeau in DRAPEAUX_DETERMINISTES if detections[drapeau](offre)]
 
@@ -344,6 +379,7 @@ def cles_doublon(offre: dict[str, Any]) -> tuple[tuple[str, ...], ...]:
 def prefiltrer(
     offres: Iterable[dict[str, Any]],
     exclure_rqth: bool = False,
+    codes_rome: Sequence[str] = CODES_ROME_DEFAUT,
 ) -> tuple[list[dict[str, Any]], list[tuple[dict[str, Any], str]]]:
     """Sépare les offres à envoyer au LLM de celles écartées, avec leur motif.
 
@@ -355,19 +391,27 @@ def prefiltrer(
     Une offre rémunérée au taux journalier est écartée comme une profession
     libérale : le contrat annoncé a beau être un CDI, la mission est celle d'un
     indépendant.
+
+    ``codes_rome`` restreint la veille à des familles de métiers (voir
+    :func:`code_rome_retenu`).
     """
     retenues: list[dict[str, Any]] = []
     ecartees: list[tuple[dict[str, Any], str]] = []
     deja_vues: set[tuple[str, ...]] = set()
 
     for offre in offres:
+        if not code_rome_retenu(offre, codes_rome):
+            ecartees.append((offre, MOTIF_ROME))
+            continue
         if est_profession_liberale(offre):
             ecartees.append((offre, MOTIF_LIBERALE))
             continue
         if est_stage(offre):
             ecartees.append((offre, MOTIF_STAGE))
             continue
-        if exige_experience_longue(offre):
+        # Le libellé de l'API et la description se complètent : beaucoup d'annonces
+        # affichent « débutant accepté » puis réclament « 5 ans minimum » en clair.
+        if exige_experience_longue(offre) or exige_experience_dans_le_texte(offre):
             ecartees.append((offre, MOTIF_EXPERIENCE))
             continue
         if est_remunere_au_jour(offre):
@@ -472,6 +516,9 @@ d'isoler les rares offres où ce candidat a une vraie chance :
 - Un poste qui exige des compétences ou des responsabilités qu'un débutant ne peut pas
   tenir n'est pas "postuler", quoi qu'affiche le champ « expérience ».
 - Un métier sans rapport avec le profil se note bas, sans chercher de rapprochement.
+- Si l'annonce dit explicitement accueillir les débutants ou privilégier la capacité
+  d'apprentissage, ne pénalise pas l'ampleur des missions : une liste de technologies
+  longue n'est pas un obstacle quand l'employeur annonce ne pas tout exiger.
 - Une offre qui mérite l'un des drapeaux "permis", "telephone", "bac5" ou "freelance"
   sera de toute façon classée "non" : ne lui donne pas le verdict "postuler".
 

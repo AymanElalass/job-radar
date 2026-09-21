@@ -10,6 +10,7 @@ import pytest
 from faux_reseau import FauxLLM
 from job_radar.llm import ErreurLLM
 from job_radar.tri import (
+    DRAPEAUX_DETERMINISTES,
     DRAPEAUX_LLM,
     DRAPEAUX_REDHIBITOIRES,
     DRAPEAUX_VALIDES,
@@ -17,6 +18,7 @@ from job_radar.tri import (
     MOTIF_DOUBLON,
     MOTIF_EXPERIENCE,
     MOTIF_LIBERALE,
+    MOTIF_ROME,
     MOTIF_RQTH,
     MOTIF_STAGE,
     MOTIF_TJM,
@@ -27,6 +29,7 @@ from job_radar.tri import (
     annees_experience,
     appliquer_regle_verdict,
     charger_criteres,
+    code_rome_retenu,
     construire_prompt,
     decouper_en_lots,
     drapeaux_deterministes,
@@ -59,6 +62,7 @@ def offre(identifiant="A", **champs):
         "lieu": "59 - Lille",
         "contrat": "CDI",
         "experience": "Débutant accepté",
+        "rome": "M1805",
         "salaire": "Annuel de 28000 Euros",
         "alternance": False,
         "date_creation": "2026-09-20T09:00:00.000Z",
@@ -896,10 +900,10 @@ def test_drapeaux_deterministes_cumules():
     complete = offre(
         "A",
         entreprise="Forums Talents Handicap",
-        description="Permis B obligatoire. Formation bac+5 exigée. 5 ans minimum.",
+        description="Permis B obligatoire. Formation bac+5 exigée.",
     )
 
-    assert drapeaux_deterministes(complete) == ["rqth", "permis", "bac5", "experience"]
+    assert drapeaux_deterministes(complete) == ["rqth", "permis", "bac5"]
 
 
 def test_aucun_drapeau_deterministe_sur_une_offre_neutre():
@@ -960,3 +964,167 @@ def test_le_prompt_annonce_la_regle_des_drapeaux_redhibitoires():
     assert 'classée "non"' in prompt
     for drapeau in DRAPEAUX_REDHIBITOIRES:
         assert f'"{drapeau}"' in prompt
+
+
+# ------------------------------------------------------------- codes ROME
+
+
+@pytest.mark.parametrize(
+    "rome",
+    ["M1805", "M1810", "M1801", "M1802", "K2107", "K2111"],
+)
+def test_code_rome_retenu(rome):
+    assert code_rome_retenu(offre("A", rome=rome)) is True
+
+
+@pytest.mark.parametrize(
+    "rome",
+    ["K2110", "K2106", "G1803", "H1210", "D1106", "M1607"],
+)
+def test_code_rome_hors_perimetre(rome):
+    assert code_rome_retenu(offre("A", rome=rome)) is False
+
+
+def test_prefixe_de_famille_et_code_complet():
+    # « M18 » retient toute la famille, « K2107 » une seule fiche.
+    assert code_rome_retenu(offre("A", rome="M1806"), codes=("M18",)) is True
+    assert code_rome_retenu(offre("A", rome="K2107"), codes=("K2107",)) is True
+    assert code_rome_retenu(offre("A", rome="K2108"), codes=("K2107",)) is False
+
+
+def test_code_rome_insensible_a_la_casse_et_aux_espaces():
+    assert code_rome_retenu(offre("A", rome=" m1805 ")) is True
+    assert code_rome_retenu(offre("A", rome="M1805"), codes=(" m18 ",)) is True
+
+
+@pytest.mark.parametrize("rome", [None, "", "   "])
+def test_offre_sans_code_rome_conservee(rome):
+    # Les offres collectées avant que le champ soit conservé n'en ont pas :
+    # un filtre ne doit pas écarter ce qu'il ne sait pas juger.
+    assert code_rome_retenu(offre("A", rome=rome)) is True
+
+
+def test_liste_de_codes_vide_desactive_le_filtre():
+    assert code_rome_retenu(offre("A", rome="G1803"), codes=()) is True
+
+
+def test_offres_hors_codes_rome_ecartees_au_prefiltre():
+    informatique = offre("A", rome="M1805")
+    formation = offre("B", intitule="Formateur", rome="K2111")
+    boulangerie = offre("C", intitule="Boulanger", rome="D1102")
+
+    retenues, ecartees = prefiltrer([informatique, formation, boulangerie])
+
+    assert [o["id"] for o in retenues] == ["A", "B"]
+    assert ecartees == [(boulangerie, MOTIF_ROME)]
+
+
+def test_codes_rome_configurables_au_prefiltre():
+    retenues, ecartees = prefiltrer(
+        [offre("A", rome="M1805"), offre("B", intitule="Formateur", rome="K2111")],
+        codes_rome=("K2111",),
+    )
+
+    assert [o["id"] for o in retenues] == ["B"]
+    assert ecartees[0][1] == MOTIF_ROME
+
+
+def test_filtre_rome_teste_avant_les_autres_motifs():
+    # Inutile de juger l'expérience ou le statut d'une offre hors périmètre.
+    hors_perimetre = offre("A", intitule="Boulanger", rome="D1102", contrat="Profession libérale")
+
+    _, ecartees = prefiltrer([hors_perimetre])
+
+    assert ecartees == [(hors_perimetre, MOTIF_ROME)]
+
+
+# ------------------------------------------------------------------ prompt
+
+
+def test_le_prompt_ne_penalise_pas_l_ampleur_des_missions_pour_un_debutant():
+    prompt = construire_prompt(CRITERES, [offre("A")])
+
+    assert "accueillir les débutants" in prompt
+    assert "ne pénalise pas l'ampleur des missions" in prompt
+    assert "ne pas tout exiger" in prompt
+
+
+# ------------------------------- expérience exigée dans la description (réel)
+
+
+#: Extrait réel de l'offre « Développeur Java Fullstack React/Angular -
+#: Services Financiers » : l'API annonce « Débutant accepté », la description
+#: réclame cinq ans, au-delà des 800 premiers caractères.
+DESCRIPTION_JAVA_FULLSTACK = (
+    "Rejoignez une équipe produit sur le périmètre des services financiers. "
+    + "Vous participez aux rituels agiles, aux revues de code et au pair programming. " * 12
+    + "Culture engineering forte : revue de code, pair programming. "
+    "Qualifications 5 ans minimum sur stack Java + React.js "
+    "(pas de profils séparés backend/frontend)."
+)
+
+
+def test_cas_reel_java_fullstack_ecarte_malgre_debutant_accepte():
+    java_fullstack = offre(
+        "A",
+        intitule="Développeur Java Fullstack React/Angular - Services Financiers",
+        experience="Débutant accepté",
+        description=DESCRIPTION_JAVA_FULLSTACK,
+    )
+
+    # L'exigence est bien au-delà de l'extrait envoyé au modèle.
+    assert DESCRIPTION_JAVA_FULLSTACK.index("5 ans minimum") > LONGUEUR_DESCRIPTION
+    assert exige_experience_longue(java_fullstack) is False
+    assert exige_experience_dans_le_texte(java_fullstack) is True
+
+    retenues, ecartees = prefiltrer([java_fullstack])
+
+    assert retenues == []
+    assert ecartees == [(java_fullstack, MOTIF_EXPERIENCE)]
+
+
+def test_exigence_lue_dans_toute_la_description():
+    lointaine = offre("A", description="blabla. " * 900 + "Expérience : 5 ans minimum.")
+
+    assert len(lointaine["description"]) > 5 * LONGUEUR_DESCRIPTION
+    assert exige_experience_dans_le_texte(lointaine) is True
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        "5 ans minimum sur stack Java + React.js.",
+        "Minimum 5 ans sur stack Java.",
+        "Au moins 5 ans sur stack Java.",
+        "Expérience de 5 ans minimum en développement.",
+        "Expérience : 3 à 5 ans minimum en support N2.",
+        "Séniorité requise : 7 à 8 ans minimum d'expérience.",
+        "Une expérience significative (5 ans minimum) en Vue.js.",
+        "Expérience significative d'au moins 5 ans minimum.",
+    ],
+)
+def test_tournures_d_experience_couvertes(description):
+    assert exige_experience_dans_le_texte(offre("A", description=description)) is True
+
+
+def test_experience_ecartee_meme_si_le_libelle_api_dit_debutant():
+    # Les deux sources sont complémentaires : libellé de l'API ET description.
+    _, ecartees = prefiltrer(
+        [
+            offre("A", experience="Débutant accepté", description="Au moins 4 ans exigés."),
+            offre("B", experience="5 An(s)", description="Poste ouvert."),
+        ]
+    )
+
+    assert [(o["id"], motif) for o, motif in ecartees] == [
+        ("A", MOTIF_EXPERIENCE),
+        ("B", MOTIF_EXPERIENCE),
+    ]
+
+
+def test_experience_n_est_plus_un_drapeau_deterministe():
+    # Une offre qui réclame cinq ans est écartée, donc jamais retenue avec un drapeau.
+    assert "experience" not in DRAPEAUX_DETERMINISTES
+    assert drapeaux_deterministes(offre("A", description="5 ans minimum exigés.")) == []
+    # Le modèle reste libre de poser le drapeau sur d'autres formulations.
+    assert "experience" in DRAPEAUX_LLM

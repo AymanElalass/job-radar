@@ -41,6 +41,7 @@ def test_config_complete(tmp_path):
             "taille_lot": 20,
             "delai_max": 180,
             "exclure_rqth": False,
+            "codes_rome": ["M18", "K2107", "K2111"],
         },
     }
 
@@ -122,6 +123,7 @@ def test_section_tri_lue(tmp_path):
         taille_lot = 10
         delai_max = 90
         exclure_rqth = true
+        codes_rome = ["M1805", "K2111"]
         """,
     )
 
@@ -131,6 +133,7 @@ def test_section_tri_lue(tmp_path):
         "taille_lot": 10,
         "delai_max": 90,
         "exclure_rqth": True,
+        "codes_rome": ["M1805", "K2111"],
     }
 
 
@@ -150,6 +153,22 @@ def test_section_tri_absente_donne_des_valeurs_par_defaut(tmp_path):
     assert tri["taille_lot"] == 20
     assert tri["delai_max"] == 180
     assert tri["exclure_rqth"] is False
+    assert tri["codes_rome"] == ["M18", "K2107", "K2111"]
+
+
+def test_filtre_rome_desactivable(tmp_path):
+    chemin = ecrire_config(
+        tmp_path,
+        """
+        [recherche]
+        mots_cles = ["python"]
+
+        [tri]
+        codes_rome = []
+        """,
+    )
+
+    assert charger_config(chemin)["tri"]["codes_rome"] == []
 
 
 def test_publiee_depuis_invalide_refuse(tmp_path):

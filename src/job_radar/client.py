@@ -109,6 +109,8 @@ def reduire_offre(offre: dict[str, Any]) -> dict[str, Any]:
         "contrat": offre.get("typeContratLibelle") or offre.get("typeContrat"),
         "salaire": salaire.get("libelle"),
         "experience": offre.get("experienceLibelle"),
+        "rome": offre.get("romeCode"),
+        "rome_libelle": offre.get("romeLibelle"),
         "alternance": bool(offre.get("alternance", False)),
         "date_creation": offre.get("dateCreation"),
         "url": _extraire_url(offre),

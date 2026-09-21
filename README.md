@@ -32,6 +32,13 @@ une candidature.
    explicitement 3 ans d'expérience ou plus, et les **doublons**. Le détail des offres
    écartées et de leur motif est affiché.
 
+   Le **filtre ROME** ne garde que les offres dont le code `romeCode` appartient aux familles
+   ou codes de `[tri].codes_rome` : par défaut **M18** (« Systèmes d'information et de
+   télécommunication », M1801 à M1810), **K2107** (« Enseignement général du second degré ») et
+   **K2111** (« Formation professionnelle »). Un préfixe retient toute la famille, un code
+   complet une seule fiche, une liste vide désactive le filtre. Une offre **sans** code ROME est
+   conservée : un filtre ne doit pas écarter ce qu'il ne sait pas juger.
+
    Le **dédoublonnage** joue sur deux clés : même intitulé normalisé + même entreprise (annonce
    republiée), et même intitulé normalisé + même ville (même annonce diffusée par des
    intermédiaires différents — `MANPOWER` et `Randstad` pour le même poste à Mérignac).
@@ -49,8 +56,11 @@ une candidature.
      qu'une exigence accompagne le diplôme. Une fourchette (`bac+3 à bac+5`) ou une énumération
      de niveaux proposés (`bac, bac+2, bachelor/bac+3 ou mastère/bac+5`, typique des offres
      d'alternance) n'est pas une exigence.
-   - **`experience`** : « X ans minimum », « minimum X ans », « au moins X ans » avec X ≥ 3 dans
-     la description — utile quand l'annonce affiche « débutant accepté » puis demande 5 ans.
+   L'**expérience** est lue à deux endroits, et une durée de 3 ans ou plus écarte l'offre : le
+   libellé de l'API (`3 An(s)`) et la **description entière** — « X ans minimum », « minimum
+   X ans », « au moins X ans ». Beaucoup d'annonces affichent « débutant accepté » puis
+   réclament cinq ans mille caractères plus loin ; la troncature à 800 caractères ne concerne
+   que l'extrait envoyé au modèle, pas ces règles.
    - **stage** : le mot « stage » ou « stagiaire » dans l'intitulé ou l'URL, ou une tournure
      de la description qui désigne l'offre elle-même (« en tant que stagiaire », « offre de
      stage », « le stagiaire sera… »). Le mot seul dans la description ne suffit pas : un poste
@@ -135,6 +145,7 @@ modele = "sonnet"                             # modèle passé à `claude -p --m
 taille_lot = 20                               # offres envoyées en une fois
 delai_max = 180                               # secondes par lot, au-delà le lot est abandonné
 exclure_rqth = false                          # true : écarter les offres réservées RQTH
+codes_rome = ["M18", "K2107", "K2111"]        # familles de métiers retenues, [] pour tout garder
 ```
 
 ### Fichier de critères
