@@ -71,6 +71,8 @@ ce fichier. Aucun autre module n'importe `subprocess`.
   (`permis`, `telephone`, `bac5`, `freelance`) vaut « non », quel que soit le score, qui est
   conservé tel quel. `experience` n'en fait pas partie : cela se négocie. Le prompt annonce la
   règle au modèle pour qu'il ne la contredise pas.
+- **`teletravail_complet` est mis en valeur à l'affichage** (vidéo inverse, `_style_drapeau`) :
+  c'est le drapeau le plus recherché, il doit se distinguer d'un télétravail partiel.
 - **Le prompt définit chaque drapeau par ce qu'il est ET ce qu'il n'est pas**, donne trois
   exemples notés et impose un tri sévère (`postuler` seulement avec une chance réelle ; les
   intitulés de `MOTS_SENIORITE` font chuter le score malgré « débutant accepté »). Le prompt est
@@ -102,29 +104,32 @@ ce fichier. Aucun autre module n'importe `subprocess`.
   versionner ni recopier son contenu dans le dépôt : `criteres.example.md` est la seule version
   publique.
 
-## Modes de veille
+## Recherches et modes de veille
 
-Un mode = un fichier de configuration. `config.toml` est la veille informatique,
-`config-argeles.toml` une veille large autour d'Argelès-sur-Mer. Chacun a sa base, sa sélection
-et ses critères : rien ne se mélange, et **modifier un mode ne doit pas toucher l'autre**.
+`config.toml` décrit la veille livrée. Une autre veille — autre zone, autres métiers — se
+décrit dans un second fichier passé à `--config`, avec ses propres `[chemins]` : rien ne se
+mélange, et **modifier un mode ne doit pas toucher l'autre**.
 
 - `[recherche]` décrit une recherche, `[[recherche]]` répétée en décrit plusieurs. Chaque bloc
-  porte ses propres `mots_cles`, `departements`, `commune`, `distance`, `publiee_depuis` et
-  `pages_max` ; `charger_config` renvoie toujours une liste dans `config["recherches"]`.
+  porte ses propres `mots_cles`, `departements`, `commune`, `distance`, `publiee_depuis`,
+  `pages_max` et `teletravail_complet` ; `charger_config` renvoie toujours une liste dans
+  `config["recherches"]`, et les offres de toutes les recherches sont dédoublonnées ensemble
+  par identifiant.
 - Un mot-clé n'est obligatoire que si aucune commune n'est donnée : sans l'un ni l'autre, la
   recherche ramènerait toutes les offres de France, et la configuration est refusée.
+- `commune` (code INSEE) et `distance` (km) permettent une veille locale sans mot-clé.
 - `[chemins]` (base, nouvelles, selection) fixe les fichiers du mode ; les options `--base` et
   `--sortie` restent prioritaires (`resoudre_chemin`).
-- **La pagination de l'API plafonne à ~1050 offres par recherche.** Une recherche qui remplit
-  toutes ses pages perd des offres : `collecter` le signale avec le total lu dans l'en-tête
-  `Content-Range` (`total_disponible`). La réponse est de découper la zone, pas d'ignorer le
-  message — c'est ce qui a fait passer Argelès d'un rayon de 30 km à deux recherches
-  (Argelès 15 km, Perpignan 10 km), dédoublonnées ensemble par identifiant.
+- **La pagination de l'API plafonne à ~1050 offres par recherche** (7 pages de 150). Une
+  recherche qui remplit toutes ses pages perd des offres : `collecter` le signale avec le total
+  lu dans l'en-tête `Content-Range` (`total_disponible`). La réponse est de découper la zone ou
+  de raccourcir la fenêtre de publication — et de **mesurer** avant de conclure : une dernière
+  page incomplète signifie que tout a été ramené, même si le nombre paraît gros.
 - `teletravail_complet = true` sur un bloc de recherche marque ses offres
   (`teletravail_complet_exige`), et le pré-filtre n'en garde que celles dont le texte annonce un
-  poste entièrement à distance (`est_teletravail_complet`). La provenance est portée par l'offre
-  parce que la règle ne vaut que pour ces recherches ; le dédoublonnage garde la première
-  provenance rencontrée, donc l'ordre des blocs compte (le géographique d'abord).
+  poste entièrement à distance (`est_teletravail_complet`) — les recherches par mots-clés de
+  télétravail ramènent surtout des offres hybrides. Une offre trouvée aussi par une recherche
+  classique perd cette marque et échappe au filtre, quel que soit l'ordre des blocs.
 - `[tri].experience_max` règle la sévérité sur l'expérience : au-delà, écartée ; entre
   `SEUIL_EXPERIENCE_ANNEES` et ce plafond, gardée avec le drapeau `experience`.
 

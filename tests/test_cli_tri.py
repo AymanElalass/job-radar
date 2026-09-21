@@ -341,13 +341,13 @@ def test_chemins_de_la_configuration_utilises(tmp_path, monkeypatch, capsys):
     """Base et sélection peuvent venir du fichier de configuration."""
     criteres = tmp_path / "criteres.md"
     criteres.write_text(CRITERES, encoding="utf-8")
-    base = tmp_path / "argeles.db"
-    selection = tmp_path / "selection-argeles.json"
-    config = tmp_path / "config-argeles.toml"
+    base = tmp_path / "veille-locale.db"
+    selection = tmp_path / "selection-locale.json"
+    config = tmp_path / "config-locale.toml"
     config.write_text(
         f"""
         [recherche]
-        commune = "66008"
+        commune = "59350"
         distance = 30
 
         [chemins]
@@ -408,3 +408,32 @@ def test_option_base_prioritaire_sur_la_configuration(tmp_path, monkeypatch, cap
 
     assert "1 offre(s) partiraient" in capsys.readouterr().out
     assert not (tmp_path / "ignoree.db").exists()
+
+
+def test_teletravail_complet_mis_en_valeur():
+    """Le drapeau le plus recherché se distingue d'un télétravail partiel."""
+    rendu = cli._drapeaux_colores(["teletravail_complet", "teletravail", "permis", "rqth"])
+
+    assert f"[{cli.STYLE_TELETRAVAIL_COMPLET}]teletravail_complet" in rendu
+    assert "[bold green]teletravail[/bold green]" in rendu
+    assert "[red]permis[/red]" in rendu
+    # Un drapeau neutre reste sans couleur.
+    assert " rqth" in rendu
+
+
+def test_le_tableau_affiche_le_drapeau_teletravail_complet(capsys):
+    console = cli.creer_console()
+    cli.afficher_tri(
+        console,
+        [
+            offre("A")
+            | {
+                "score": 90,
+                "resume": "Poste entièrement à distance",
+                "drapeaux": ["teletravail_complet"],
+                "verdict": "postuler",
+            }
+        ],
+    )
+
+    assert "teletravail_complet" in capsys.readouterr().out

@@ -214,7 +214,13 @@ def collecter(
                         if not offre["id"]:
                             continue
                         offre["teletravail_complet_exige"] = recherche["teletravail_complet"]
-                        offres.setdefault(offre["id"], offre)
+
+                        connue = offres.setdefault(offre["id"], offre)
+                        if not recherche["teletravail_complet"]:
+                            # Trouvée aussi par une recherche classique : la règle
+                            # du télétravail ne s'applique plus, quel que soit
+                            # l'ordre des blocs de recherche.
+                            connue["teletravail_complet_exige"] = False
 
                     # Page incomplète : inutile de demander la suivante.
                     if len(resultats) < TAILLE_PAGE:
@@ -613,16 +619,31 @@ def _afficher_prefiltre(
         console.print(f"  - {nombre} × {motif}")
 
 
+#: Style de chaque drapeau à l'affichage. Le télétravail complet, le plus recherché,
+#: est le seul en vidéo inverse : il doit sauter aux yeux dans un tableau.
+STYLE_TELETRAVAIL_COMPLET = "bold green reverse"
+
+
+def _style_drapeau(drapeau: str) -> str | None:
+    if drapeau == "teletravail_complet":
+        return STYLE_TELETRAVAIL_COMPLET
+    if drapeau in DRAPEAUX_ELIMINATOIRES:
+        return "red"
+    if drapeau in DRAPEAUX_BONUS:
+        return "bold green"
+    return None
+
+
 def _drapeaux_colores(drapeaux: list[str]) -> str:
-    """Colore les drapeaux : rouge si éliminatoire, vert si valorisant."""
+    """Colore les drapeaux : rouge si éliminatoire, vert si valorisant.
+
+    Le télétravail complet passe en vidéo inverse, pour se distinguer d'un
+    télétravail partiel.
+    """
     morceaux = []
     for drapeau in drapeaux:
-        if drapeau in DRAPEAUX_ELIMINATOIRES:
-            morceaux.append(f"[red]{drapeau}[/red]")
-        elif drapeau in DRAPEAUX_BONUS:
-            morceaux.append(f"[bold green]{drapeau}[/bold green]")
-        else:
-            morceaux.append(drapeau)
+        style = _style_drapeau(drapeau)
+        morceaux.append(f"[{style}]{drapeau}[/{style}]" if style else drapeau)
     return " ".join(morceaux)
 
 

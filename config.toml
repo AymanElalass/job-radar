@@ -1,5 +1,7 @@
-# Critères de veille : une recherche est lancée par couple mot-clé / département.
-[recherche]
+# Critères de veille. Chaque bloc [[recherche]] décrit une recherche, déclinée en
+# une requête par couple mot-clé / département ; les offres de toutes les recherches
+# sont dédoublonnées ensemble par identifiant.
+[[recherche]]
 # Un mot-clé peut être une expression de plusieurs mots ("alternance data") :
 # l'API l'accepte telle quelle. La virgule, elle, y est interdite (elle sépare les
 # mots-clés côté API) : utilisez plutôt une entrée de liste par mot-clé.
@@ -22,6 +24,19 @@ publiee_depuis = 7
 # Les offres étant triées par date de création décroissante, la première page
 # contient toujours les annonces les plus récentes.
 pages_max = 2
+
+# Le télétravail complet, partout en France. « télétravail complet » n'est pas
+# repris ici : l'API ne ramène rien sur cette expression.
+#
+# « teletravail_complet » marque la provenance de ces offres : le pré-filtre ne
+# gardera que celles dont l'intitulé ou la description annonce vraiment un poste
+# entièrement à distance, les recherches par mots-clés ramenant surtout des offres
+# hybrides. Une offre trouvée aussi par une recherche ci-dessus n'est pas concernée.
+[[recherche]]
+mots_cles = ["100% télétravail", "full remote", "full télétravail"]
+publiee_depuis = 7
+pages_max = 7
+teletravail_complet = true
 
 # Étape 2 : tri des offres par LLM.
 [tri]

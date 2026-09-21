@@ -155,7 +155,7 @@ plusieurs, chacune avec ses propres critères — par exemple un rayon autour d'
 
 ```toml
 [[recherche]]
-commune = "66008"       # code INSEE (Argelès-sur-Mer)
+commune = "59350"       # code INSEE (ici Lille)
 distance = 15           # rayon en km ; 0 = la commune seule, 10 par défaut côté API
 publiee_depuis = 14
 pages_max = 7
@@ -175,7 +175,7 @@ remplit toutes ses pages, elle **perd des offres**, et `job-radar` le dit, avec 
 annoncé par l'API :
 
 ```
-  ! saturation : toutes offres / commune 66008 (30 km) a rempli ses pages avec 1027 offre(s)
+  ! saturation : toutes offres / commune 59350 (30 km) a rempli ses pages avec 1050 offre(s)
     sur 1834 trouvée(s) par l'API. Resserrez la zone, la fenêtre de publication, ou
     augmentez pages_max.
 ```
@@ -188,17 +188,33 @@ par identifiant.
 n'en gardera que celles dont l'intitulé ou la description annonce un poste **entièrement** à
 distance (« 100 % télétravail », « full remote », « télétravail total », « entièrement à
 distance », « 5j/5 »…). Les autres sont écartées avec le motif « télétravail partiel » — une
-recherche sur « full remote » ramène surtout des offres hybrides. Les offres venues des autres
-recherches ne sont pas concernées.
+recherche sur « full remote » ramène surtout des offres hybrides, et les faux amis sont
+nombreux (« cabinet 100 % dématérialisé », « poste 100 % sur site », « mutuelle prise en
+charge à 100 % »). Une offre trouvée **aussi** par une recherche classique n'est pas
+concernée, quel que soit l'ordre des blocs. Les autres règles — ROME, expérience, stage,
+freelance — s'appliquent normalement.
+
+C'est ce que fait la seconde recherche de `config.toml` :
+
+```toml
+[[recherche]]
+mots_cles = ["100% télétravail", "full remote", "full télétravail"]
+publiee_depuis = 7
+pages_max = 7
+teletravail_complet = true
+```
+
+(« télétravail complet » ne figure pas dans la liste : l'API ne ramène rien sur cette
+expression.)
 
 Les fichiers peuvent être propres à un mode de veille, pour que deux configurations ne
 mélangent ni leur historique ni leur sélection :
 
 ```toml
 [chemins]
-base = "data/argeles.db"
-nouvelles = "data/nouvelles-argeles.json"
-selection = "data/selection-argeles.json"
+base = "data/veille-locale.db"
+nouvelles = "data/nouvelles-locales.json"
+selection = "data/selection-locale.json"
 ```
 
 Les options `--base` et `--sortie` de la ligne de commande restent prioritaires.
@@ -253,16 +269,15 @@ uv run job-radar collecter   # ou simplement « uv run job-radar »
 uv run job-radar trier
 ```
 
-### Deux modes livrés
-
-| Fichier | Portée | Historique |
-| --- | --- | --- |
-| `config.toml` | métiers informatiques et formation (filtre ROME), France entière | `data/offres.db` |
-| `config-argeles.toml` | tous métiers autour d'Argelès-sur-Mer (15 km) et de Perpignan (10 km), plus le télétravail intégral partout | `data/argeles.db` |
+`config.toml` décrit la veille livrée : métiers informatiques et formation (filtre ROME),
+France entière, plus une recherche dédiée au **télétravail complet**, historique dans
+`data/offres.db`. Une autre veille — une autre zone, d'autres métiers, d'autres critères — se
+décrit dans un second fichier passé à `--config`, avec ses propres `[chemins]` pour que les
+deux historiques ne se mélangent pas :
 
 ```bash
-uv run job-radar collecter --config config-argeles.toml
-uv run job-radar trier --config config-argeles.toml
+uv run job-radar collecter --config config-autre.toml
+uv run job-radar trier --config config-autre.toml
 ```
 
 ### `collecter`
@@ -355,7 +370,8 @@ Tri de 13 offre(s) par sonnet en 1 lot(s), 180 s au plus par lot :
 
 Le verdict `postuler` s'affiche en vert, `peut-etre` en jaune, `non` en gris. Les drapeaux
 **éliminatoires** (`permis`, `telephone`, `experience`, `bac5`, `freelance`) sortent en rouge,
-le **télétravail** (`teletravail`, `teletravail_complet`) en vert gras.
+le `teletravail` partiel en vert gras, et `teletravail_complet` — le plus recherché — en vidéo
+inverse pour sauter aux yeux.
 
 Après un changement de critères ou de prompt, on peut tout retrier :
 

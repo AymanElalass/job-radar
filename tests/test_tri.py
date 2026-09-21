@@ -1416,3 +1416,22 @@ def test_la_regle_teletravail_passe_avant_les_autres_motifs():
     _, ecartees = prefiltrer([partielle])
 
     assert ecartees == [(partielle, MOTIF_TELETRAVAIL_PARTIEL)]
+
+
+@pytest.mark.parametrize(
+    "texte",
+    [
+        "2 jours de télétravail par semaine",
+        "Télétravail partiel possible",
+        "Télétravail partiel après validation",
+        "Jusqu'à 3 jours de télétravail",
+        "Télétravail : 1 jour par semaine",
+        "Poste 100 % sur site (pas de télétravail)",
+        "Cabinet 100 % dématérialisé",
+        "Mutuelle prise en charge à 100 %",
+        "Environnement 100 % made in France",
+        "Développeur Full-Stack",
+    ],
+)
+def test_teletravail_partiel_ou_faux_ami_non_reconnu(texte):
+    assert est_teletravail_complet(offre("A", description=texte)) is False

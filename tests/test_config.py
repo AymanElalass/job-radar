@@ -290,7 +290,7 @@ def test_plusieurs_recherches(tmp_path):
         tmp_path,
         """
         [[recherche]]
-        commune = "66008"
+        commune = "59350"
         distance = 30
         publiee_depuis = 14
         pages_max = 7
@@ -307,7 +307,7 @@ def test_plusieurs_recherches(tmp_path):
     assert recherches[0] == {
         "mots_cles": [],
         "departements": [],
-        "commune": "66008",
+        "commune": "59350",
         "distance": 30,
         "publiee_depuis": 14,
         "pages_max": 7,
@@ -322,7 +322,7 @@ def test_commune_sans_mot_cle_acceptee(tmp_path):
         tmp_path,
         """
         [recherche]
-        commune = "66008"
+        commune = "59350"
         distance = 30
         """,
     )
@@ -330,7 +330,7 @@ def test_commune_sans_mot_cle_acceptee(tmp_path):
     (recherche,) = charger_config(chemin)["recherches"]
 
     assert recherche["mots_cles"] == []
-    assert recherche["commune"] == "66008"
+    assert recherche["commune"] == "59350"
 
 
 def test_recherche_sans_mot_cle_ni_commune_refusee(tmp_path):
@@ -365,7 +365,7 @@ def test_distance_negative_refusee(tmp_path):
         tmp_path,
         """
         [recherche]
-        commune = "66008"
+        commune = "59350"
         distance = -5
         """,
     )
@@ -379,7 +379,7 @@ def test_distance_nulle_acceptee(tmp_path):
         tmp_path,
         """
         [recherche]
-        commune = "66008"
+        commune = "59350"
         distance = 0
         """,
     )
@@ -392,12 +392,12 @@ def test_chemins_et_plafond_d_experience(tmp_path):
         tmp_path,
         """
         [recherche]
-        commune = "66008"
+        commune = "59350"
 
         [chemins]
-        base = "data/argeles.db"
-        nouvelles = "data/nouvelles-argeles.json"
-        selection = "data/selection-argeles.json"
+        base = "data/veille-locale.db"
+        nouvelles = "data/nouvelles-locales.json"
+        selection = "data/selection-locale.json"
 
         [tri]
         codes_rome = []
@@ -407,8 +407,8 @@ def test_chemins_et_plafond_d_experience(tmp_path):
 
     config = charger_config(chemin)
 
-    assert config["chemins"]["base"] == Path("data/argeles.db")
-    assert config["chemins"]["selection"] == Path("data/selection-argeles.json")
+    assert config["chemins"]["base"] == Path("data/veille-locale.db")
+    assert config["chemins"]["selection"] == Path("data/selection-locale.json")
     assert config["tri"]["codes_rome"] == []
     assert config["tri"]["experience_max"] == 5
 
@@ -416,13 +416,13 @@ def test_chemins_et_plafond_d_experience(tmp_path):
 def test_une_seule_requete_sans_mot_cle_autour_d_une_commune():
     client = FauxClient()
 
-    collecter(client, config(mots_cles=[], commune="66008", distance=30), bavard=False)
+    collecter(client, config(mots_cles=[], commune="59350", distance=30), bavard=False)
 
     assert client.appels == [
         {
             "mots_cles": None,
             "departement": None,
-            "commune": "66008",
+            "commune": "59350",
             "distance": 30,
             "publiee_depuis": 7,
             "page": 0,
@@ -442,7 +442,7 @@ def test_toutes_les_recherches_sont_lancees_et_dedoublonnees():
             {
                 "mots_cles": [],
                 "departements": [],
-                "commune": "66008",
+                "commune": "59350",
                 "distance": 30,
                 "publiee_depuis": 14,
                 "pages_max": 1,
@@ -464,7 +464,7 @@ def test_toutes_les_recherches_sont_lancees_et_dedoublonnees():
 
     assert [o["id"] for o in offres] == ["A", "B"]
     assert [(a["commune"], a["mots_cles"]) for a in client.appels] == [
-        ("66008", None),
+        ("59350", None),
         (None, "full remote"),
     ]
 
@@ -484,7 +484,7 @@ def test_provenance_teletravail_marquee_sur_les_offres():
             {
                 "mots_cles": [],
                 "departements": [],
-                "commune": "66008",
+                "commune": "59350",
                 "distance": 15,
                 "publiee_depuis": 14,
                 "pages_max": 1,
@@ -522,7 +522,7 @@ def test_offre_trouvee_par_deux_recherches_garde_la_premiere_provenance():
             {
                 "mots_cles": [],
                 "departements": [],
-                "commune": "66008",
+                "commune": "59350",
                 "distance": 15,
                 "publiee_depuis": 14,
                 "pages_max": 1,
@@ -552,11 +552,11 @@ def test_saturation_signalee(capsys):
     client = FauxClient(resultats_par_appel=[pleine, suivante])
     client.dernier_total = 1834
 
-    collecter(client, config(mots_cles=[], commune="66008", distance=15, pages_max=2), bavard=False)
+    collecter(client, config(mots_cles=[], commune="59350", distance=15, pages_max=2), bavard=False)
 
     sortie = capsys.readouterr().out
     assert "saturation" in sortie
-    assert "commune 66008 (15 km)" in sortie
+    assert "commune 59350 (15 km)" in sortie
     assert "300 offre(s)" in sortie
     assert "1834" in sortie
 
@@ -565,7 +565,7 @@ def test_pas_de_saturation_quand_la_derniere_page_est_incomplete(capsys):
     pleine = [{"id": f"ID{i}", "intitule": "Poste"} for i in range(TAILLE_PAGE)]
     client = FauxClient(resultats_par_appel=[pleine, [{"id": "DERNIERE", "intitule": "Poste"}]])
 
-    collecter(client, config(commune="66008", pages_max=3), bavard=False)
+    collecter(client, config(commune="59350", pages_max=3), bavard=False)
 
     assert "saturation" not in capsys.readouterr().out
 
@@ -576,3 +576,67 @@ def test_pas_de_saturation_sur_une_seule_page_incomplete(capsys):
     collecter(client, config(), bavard=False)
 
     assert "saturation" not in capsys.readouterr().out
+
+
+def test_offre_trouvee_par_les_deux_types_de_recherche_quel_que_soit_l_ordre():
+    """La règle du télétravail ne s'applique pas à une offre aussi trouvée autrement."""
+    client = FauxClient(
+        resultats_par_appel=[
+            [{"id": "A", "intitule": "Poste"}],
+            [{"id": "A", "intitule": "Poste"}],
+        ]
+    )
+    teletravail = {
+        "mots_cles": ["full remote"],
+        "departements": [],
+        "commune": None,
+        "distance": None,
+        "publiee_depuis": 7,
+        "pages_max": 1,
+        "teletravail_complet": True,
+    }
+    classique = {
+        "mots_cles": ["testeur"],
+        "departements": [],
+        "commune": None,
+        "distance": None,
+        "publiee_depuis": 7,
+        "pages_max": 1,
+        "teletravail_complet": False,
+    }
+
+    # La recherche télétravail passe en premier : la marque doit tomber quand la
+    # recherche classique retrouve la même offre.
+    (offre,) = collecter(client, {"recherches": [teletravail, classique]}, bavard=False)
+
+    assert offre["teletravail_complet_exige"] is False
+
+
+def test_offre_seulement_teletravail_reste_marquee():
+    client = FauxClient(resultats_par_appel=[[{"id": "A", "intitule": "Poste"}], []])
+    configuration = {
+        "recherches": [
+            {
+                "mots_cles": ["full remote"],
+                "departements": [],
+                "commune": None,
+                "distance": None,
+                "publiee_depuis": 7,
+                "pages_max": 1,
+                "teletravail_complet": True,
+            },
+            {
+                "mots_cles": ["testeur"],
+                "departements": [],
+                "commune": None,
+                "distance": None,
+                "publiee_depuis": 7,
+                "pages_max": 1,
+                "teletravail_complet": False,
+            },
+        ]
+    }
+
+    (offre,) = collecter(client, configuration, bavard=False)
+
+    assert offre["teletravail_complet_exige"] is True
