@@ -6,7 +6,12 @@ import pytest
 
 from faux_reseau import FauxClient
 from job_radar.cli import ErreurConfiguration, charger_config, collecter
-from job_radar.client import TAILLE_PAGE, ErreurAuthentification, ErreurRecherche
+from job_radar.client import (
+    PUBLIEE_DEPUIS_VALIDES,
+    TAILLE_PAGE,
+    ErreurAuthentification,
+    ErreurRecherche,
+)
 
 
 def ecrire_config(tmp_path, contenu: str):
@@ -640,3 +645,15 @@ def test_offre_seulement_teletravail_reste_marquee():
     (offre,) = collecter(client, configuration, bavard=False)
 
     assert offre["teletravail_complet_exige"] is True
+
+
+def test_la_configuration_livree_est_valide():
+    """Garde-fou sur config.toml : un fichier livré cassé ne doit pas passer inaperçu."""
+    config = charger_config(Path(__file__).resolve().parents[1] / "config.toml")
+
+    assert config["recherches"], "au moins une recherche"
+    for recherche in config["recherches"]:
+        assert recherche["mots_cles"] or recherche["commune"]
+        assert recherche["publiee_depuis"] in PUBLIEE_DEPUIS_VALIDES
+        assert recherche["pages_max"] >= 1
+    assert config["tri"]["criteres"], "un fichier de critères est attendu"

@@ -198,14 +198,17 @@ C'est ce que fait la seconde recherche de `config.toml` :
 
 ```toml
 [[recherche]]
-mots_cles = ["100% télétravail", "full remote", "full télétravail"]
-publiee_depuis = 7
+mots_cles = ["télétravail"]
+publiee_depuis = 3
 pages_max = 7
 teletravail_complet = true
 ```
 
-(« télétravail complet » ne figure pas dans la liste : l'API ne ramène rien sur cette
-expression.)
+Un seul mot-clé suffit : **l'API rabat les expressions sur un concept**. Mesuré sur une
+fenêtre de 7 jours, `"100% télétravail"`, `"full remote"` et `"full télétravail"` renvoient
+exactement le même ensemble que `"télétravail"` seul (5341 offres), tandis que
+`"télétravail complet"` n'en renvoie aucune et que `"remote"` seul n'en renvoie que 6. Les
+variantes ne servaient qu'à multiplier les requêtes.
 
 Les fichiers peuvent être propres à un mode de veille, pour que deux configurations ne
 mélangent ni leur historique ni leur sélection :

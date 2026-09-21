@@ -25,16 +25,21 @@ publiee_depuis = 7
 # contient toujours les annonces les plus récentes.
 pages_max = 2
 
-# Le télétravail complet, partout en France. « télétravail complet » n'est pas
-# repris ici : l'API ne ramène rien sur cette expression.
+# Le télétravail, partout en France. Un seul mot-clé : l'API rabat « 100% télétravail »,
+# « full remote » et « full télétravail » sur le même concept que « télétravail » seul
+# (5341 offres sur 7 jours dans les trois cas), les autres n'étaient que des requêtes
+# en double. La fenêtre est raccourcie à 3 jours, ce qui réduit la perte sans la
+# supprimer : mesuré à 1470 offres sur 3 jours pour 1050 récupérables (7 pages de
+# 150). Seule une fenêtre d'un jour passe entièrement (824 offres), au prix d'une
+# collecte quotidienne ; en l'état, la saturation est signalée à chaque collecte.
 #
 # « teletravail_complet » marque la provenance de ces offres : le pré-filtre ne
 # gardera que celles dont l'intitulé ou la description annonce vraiment un poste
-# entièrement à distance, les recherches par mots-clés ramenant surtout des offres
+# entièrement à distance, une recherche par mot-clé ramenant surtout des offres
 # hybrides. Une offre trouvée aussi par une recherche ci-dessus n'est pas concernée.
 [[recherche]]
-mots_cles = ["100% télétravail", "full remote", "full télétravail"]
-publiee_depuis = 7
+mots_cles = ["télétravail"]
+publiee_depuis = 3
 pages_max = 7
 teletravail_complet = true
 
