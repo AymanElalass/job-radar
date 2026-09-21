@@ -26,14 +26,31 @@ une candidature.
 ### Tri (`job-radar trier`)
 
 1. **Pré-filtre en Python, gratuit** : sont écartées sans aucun appel au LLM les offres en
-   « Profession libérale » (freelance), les **stages** (impossible de signer une convention
-   quand on est déjà diplômé), celles qui exigent explicitement 3 ans d'expérience ou plus, et
-   les doublons de même intitulé et même entreprise. Le détail des offres écartées et de leur
-   motif est affiché.
+   « Profession libérale », celles **rémunérées au taux journalier** (TJM, `€/jour` : le
+   contrat annoncé a beau être un CDI, la mission est celle d'un indépendant), les **stages**
+   (impossible de signer une convention quand on est déjà diplômé), celles qui exigent
+   explicitement 3 ans d'expérience ou plus, et les **doublons**. Le détail des offres
+   écartées et de leur motif est affiché.
 
-   Deux détections sont **déterministes**, donc jamais laissées au LLM :
+   Le **dédoublonnage** joue sur deux clés : même intitulé normalisé + même entreprise (annonce
+   republiée), et même intitulé normalisé + même ville (même annonce diffusée par des
+   intermédiaires différents — `MANPOWER` et `Randstad` pour le même poste à Mérignac).
+   L'intitulé est normalisé sans accents, sans casse, sans `(H/F)` ni ponctuation ; la ville
+   sans le préfixe de département de l'API (`59 - Lille` → `lille`).
+
+   Plusieurs **drapeaux sont posés en Python**, sans LLM, parce qu'ils sont vérifiables
+   mécaniquement — ils s'ajoutent à ceux du modèle, qui attrape les formulations non couvertes :
    - **`rqth`** : entreprise contenant « Talents Handicap » ou URL sur `handicap-job.com`.
      Avec `exclure_rqth = true`, ces offres sont écartées ; sinon elles portent le drapeau.
+   - **`permis`** : « permis B obligatoire / exigé / nécessaire ». Les tournures qui le rendent
+     facultatif l'emportent, et `permis/certification` — une rubrique des annonces agrégées —
+     est ignoré : l'exigence qui suit porte sur la certification.
+   - **`bac5`** : bac+5, master 2, mastère, école ou diplôme d'ingénieur, doctorat, à condition
+     qu'une exigence accompagne le diplôme. Une fourchette (`bac+3 à bac+5`) ou une énumération
+     de niveaux proposés (`bac, bac+2, bachelor/bac+3 ou mastère/bac+5`, typique des offres
+     d'alternance) n'est pas une exigence.
+   - **`experience`** : « X ans minimum », « minimum X ans », « au moins X ans » avec X ≥ 3 dans
+     la description — utile quand l'annonce affiche « débutant accepté » puis demande 5 ans.
    - **stage** : le mot « stage » ou « stagiaire » dans l'intitulé ou l'URL, ou une tournure
      de la description qui désigne l'offre elle-même (« en tant que stagiaire », « offre de
      stage », « le stagiaire sera… »). Le mot seul dans la description ne suffit pas : un poste
@@ -51,8 +68,12 @@ une candidature.
    en cas de réponse inexploitable, une seule nouvelle tentative, puis le lot est signalé en
    erreur sans bloquer les autres. Un lot qui dépasse `delai_max` secondes est abandonné de la
    même façon. Le temps écoulé est affiché pour chaque lot.
-4. Les verdicts sont stockés en SQLite : **une offre n'est jamais triée deux fois**.
-5. Affichage d'un tableau trié par score décroissant et écriture de `data/selection.json`,
+4. **Règle de verdict** : une offre portant un drapeau rédhibitoire — `permis`, `telephone`,
+   `bac5` ou `freelance` — est classée `non`, quel que soit le score du modèle. Le score est
+   conservé tel quel : il dit l'intérêt du poste, pas son accessibilité. `experience` n'est pas
+   rédhibitoire : une expérience demandée se négocie, pas un permis ou un bac+5.
+5. Les verdicts sont stockés en SQLite : **une offre n'est jamais triée deux fois**.
+6. Affichage d'un tableau trié par score décroissant et écriture de `data/selection.json`,
    qui contient **toute** la sélection accumulée (offres `postuler` et `peut-etre`, relues
    depuis la base) : trier par tranches avec `--limite` complète le fichier au lieu de
    l'écraser.
@@ -110,7 +131,7 @@ Le tri par LLM se règle dans le même fichier :
 ```toml
 [tri]
 criteres = "~/Documents/cv/criteres-tri.md"   # fichier Markdown, hors du dépôt
-modele = "haiku"                              # modèle passé à `claude -p --model`
+modele = "sonnet"                             # modèle passé à `claude -p --model`
 taille_lot = 20                               # offres envoyées en une fois
 delai_max = 180                               # secondes par lot, au-delà le lot est abandonné
 exclure_rqth = false                          # true : écarter les offres réservées RQTH
@@ -137,7 +158,7 @@ L'appel est volontairement réduit à un **simple appel de modèle** : aucun out
 (`--no-session-persistence`), ni `CLAUDE.md` ni hooks hérités du dossier courant
 (`--safe-mode`), un prompt système minimal et le raisonnement étendu coupé
 (`MAX_THINKING_TOKENS=0`). Sur un lot de 20 offres, cela fait passer l'appel de
-**64 s à environ 19 s** et l'en-tête de **31 400 à 7 900 jetons**.
+**64 s à environ 19 s** et l'en-tête de **31 400 à 7 900 jetons** (mesuré avec `haiku`).
 
 ## Usage
 
@@ -205,7 +226,7 @@ $ uv run job-radar trier --simulation
   - 188 × profession libérale (freelance)
   - 78 × doublon (même intitulé, même entreprise)
 
-Simulation : 481 offre(s) partiraient au modèle haiku en 25 lot(s) de 20 au maximum.
+Simulation : 481 offre(s) partiraient au modèle sonnet en 25 lot(s) de 20 au maximum.
 Rien n'a été envoyé.
 ```
 
@@ -217,8 +238,8 @@ $ uv run job-radar trier --limite 20
   - 4 × 3 ans d'expérience ou plus exigés
   - 3 × profession libérale (freelance)
 
-Tri de 13 offre(s) par haiku en 1 lot(s), 180 s au plus par lot :
-  lot 1/1 (13 offres) → haiku…
+Tri de 13 offre(s) par sonnet en 1 lot(s), 180 s au plus par lot :
+  lot 1/1 (13 offres) → sonnet…
   lot 1/1 : 13 offre(s) notée(s) en 18.7 s
   total : 18.7 s
 

@@ -11,6 +11,7 @@ from faux_reseau import FauxLLM
 from job_radar.llm import ErreurLLM
 from job_radar.tri import (
     DRAPEAUX_LLM,
+    DRAPEAUX_REDHIBITOIRES,
     DRAPEAUX_VALIDES,
     LONGUEUR_DESCRIPTION,
     MOTIF_DOUBLON,
@@ -18,19 +19,28 @@ from job_radar.tri import (
     MOTIF_LIBERALE,
     MOTIF_RQTH,
     MOTIF_STAGE,
+    MOTIF_TJM,
     MOTS_SENIORITE,
     ErreurReponseLLM,
     ErreurTri,
     ajouter_drapeaux_deterministes,
     annees_experience,
+    appliquer_regle_verdict,
     charger_criteres,
     construire_prompt,
     decouper_en_lots,
+    drapeaux_deterministes,
     est_profession_liberale,
+    est_remunere_au_jour,
     est_rqth,
     est_stage,
+    exige_bac5,
+    exige_experience_dans_le_texte,
     exige_experience_longue,
+    exige_permis,
     fusionner,
+    normaliser_intitule,
+    normaliser_ville,
     prefiltrer,
     resumer_pour_llm,
     trier,
@@ -104,10 +114,10 @@ def test_experience_courte_conservee(libelle):
 def test_prefiltre_ecarte_freelance_experience_et_doublons():
     offres = [
         offre("A"),
-        offre("B", contrat="Profession libérale"),
-        offre("C", experience="5 An(s)"),
-        offre("D"),  # même intitulé et même entreprise que A
-        offre("E", intitule="Testeur QA", entreprise="Autre"),
+        offre("B", intitule="Analyste", contrat="Profession libérale"),
+        offre("C", intitule="Intégrateur", experience="5 An(s)"),
+        offre("D"),  # même intitulé, même entreprise et même ville que A
+        offre("E", intitule="Recetteur", entreprise="Autre"),
     ]
 
     retenues, ecartees = prefiltrer(offres)
@@ -586,7 +596,7 @@ def test_stage_ecarte_au_prefiltre():
 
 
 def test_rqth_conservee_par_defaut():
-    rqth = offre("B", entreprise="Forums Talents Handicap")
+    rqth = offre("B", intitule="Analyste", entreprise="Forums Talents Handicap")
 
     retenues, ecartees = prefiltrer([offre("A"), rqth])
 
@@ -595,7 +605,7 @@ def test_rqth_conservee_par_defaut():
 
 
 def test_rqth_ecartee_si_demande():
-    rqth = offre("B", entreprise="Forums Talents Handicap")
+    rqth = offre("B", intitule="Analyste", entreprise="Forums Talents Handicap")
 
     retenues, ecartees = prefiltrer([offre("A"), rqth], exclure_rqth=True)
 
@@ -695,3 +705,258 @@ def test_drapeau_supprime_ignore_dans_une_reponse():
     )
 
     assert valider_reponse(texte, ["A"])[0]["drapeaux"] == ["permis"]
+
+
+# --------------------------------------------- permis, bac+5, expérience, TJM
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        "Un permis B valide (obligatoire pour ce poste).",
+        "Le permis B est nécessaire car quelques déplacements sont prévus.",
+        "Permis de conduire exigé.",
+        "Permis B obligatoire.",
+        "Déplacements quotidiens : permis requis.",
+    ],
+)
+def test_permis_exige_detecte(description):
+    assert exige_permis(offre("A", description=description)) is True
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        "Poste sédentaire, aucun déplacement.",
+        "Permis B apprécié mais non obligatoire.",
+        "Le permis n'est pas exigé pour ce poste.",
+        "Sans permis, le site est accessible en tramway.",
+        "Permis B souhaité.",
+        # Rubrique des annonces agrégées : l'exigence porte sur la certification.
+        "permis/certification :\n* certification ISTQB (requis)",
+    ],
+)
+def test_permis_non_exige(description):
+    assert exige_permis(offre("A", description=description)) is False
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        "Formation bac+5 en informatique exigée.",
+        "Master 2 requis en data science.",
+        "Vous êtes diplômé(e) d'une école d'ingénieurs.",
+        "De formation bac + 5, vous maîtrisez Java.",
+        "Diplôme d'ingénieur obligatoire.",
+        "Titulaire d'un mastère en informatique.",
+    ],
+)
+def test_bac5_exige_detecte(description):
+    assert exige_bac5(offre("A", description=description)) is True
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        "Formation bac+2 ou bac+3 bienvenue.",
+        "Aucun diplôme particulier n'est demandé.",
+        # Une fourchette de niveaux n'exige pas le plus haut.
+        "Profil bac+3 à bac+5 en informatique.",
+        "Public en alternance (de bac à bac +5), et en formation continue.",
+        "Formations reconnues par l'État, de niveau 4 à niveau 7 "
+        "(bac, bac+2, bachelor/bac+3 ou mastère/bac+5).",
+    ],
+)
+def test_bac5_non_exige(description):
+    assert exige_bac5(offre("A", description=description)) is False
+
+
+@pytest.mark.parametrize(
+    ("description", "attendu"),
+    [
+        ("5 ans d'expérience minimum sur des projets data.", True),
+        ("Expérience : 7 ans minimum.", True),
+        ("Séniorité requise : 8 à 10 ans d'expérience minimum.", True),
+        ("Minimum 4 ans dans un poste similaire.", True),
+        ("Au moins 3 ans d'expérience.", True),
+        ("3 ans minimum.", True),
+        # Sous le seuil, ou sans durée chiffrée.
+        ("2 ans minimum dans un poste similaire.", False),
+        ("1 an minimum.", False),
+        ("Expérience souhaitée, débutant accepté.", False),
+        ("Un minimum de rigueur est attendu.", False),
+    ],
+)
+def test_experience_minimum_dans_le_texte(description, attendu):
+    assert exige_experience_dans_le_texte(offre("A", description=description)) is attendu
+
+
+@pytest.mark.parametrize(
+    "champs",
+    [
+        {"description": "Taux journalier (TJM) : 450"},
+        {"description": "TJM selon profil."},
+        {"description": "Rémunération : 480€ / jour."},
+        {"description": "Entre 430 et 450 euros par jour."},
+        {"salaire": "500 € / jour"},
+    ],
+)
+def test_remuneration_au_jour_detectee(champs):
+    assert est_remunere_au_jour(offre("A", **champs)) is True
+
+
+@pytest.mark.parametrize(
+    "champs",
+    [
+        {"salaire": "Annuel de 45000 Euros"},
+        {"salaire": "Mensuel de 2200 Euros", "description": "CDI, 35 heures."},
+        {"description": "Une journée de télétravail par semaine."},
+    ],
+)
+def test_remuneration_salariee(champs):
+    assert est_remunere_au_jour(offre("A", **champs)) is False
+
+
+def test_tjm_ecarte_au_prefiltre():
+    tjm = offre("B", intitule="Consultant data", description="Taux journalier (TJM) : 600")
+
+    retenues, ecartees = prefiltrer([offre("A"), tjm])
+
+    assert [o["id"] for o in retenues] == ["A"]
+    assert ecartees == [(tjm, MOTIF_TJM)]
+
+
+# ------------------------------------------------- dédoublonnage entre sources
+
+
+@pytest.mark.parametrize(
+    ("brut", "attendu"),
+    [
+        ("Développeur Java (H/F)", "developpeur java"),
+        ("DÉVELOPPEUR JAVA H/F", "developpeur java"),
+        ("Développeur  Java   (F/H)", "developpeur java"),
+        ("Développeur Java - (H/F)", "developpeur java"),
+    ],
+)
+def test_normalisation_des_intitules(brut, attendu):
+    assert normaliser_intitule(brut) == attendu
+
+
+@pytest.mark.parametrize(
+    ("brut", "attendu"),
+    [
+        ("59 - Lille", "lille"),
+        ("Lille", "lille"),
+        ("92 - Issy-les-Moulineaux", "issy les moulineaux"),
+        ("75 - PARIS", "paris"),
+        ("Ile-de-France", "ile de france"),
+        (None, ""),
+    ],
+)
+def test_normalisation_des_villes(brut, attendu):
+    assert normaliser_ville(brut) == attendu
+
+
+def test_doublon_entre_deux_sources_meme_ville():
+    # La même annonce diffusée par deux intermédiaires : entreprises différentes,
+    # intitulé et ville identiques.
+    premiere = offre("A", intitule="Technicien support (H/F)", entreprise="MANPOWER")
+    seconde = offre("B", intitule="Technicien Support H/F", entreprise="Randstad")
+
+    retenues, ecartees = prefiltrer([premiere, seconde])
+
+    assert [o["id"] for o in retenues] == ["A"]
+    assert ecartees == [(seconde, MOTIF_DOUBLON)]
+
+
+def test_meme_intitule_dans_deux_villes_conserve():
+    lille = offre("A", intitule="Technicien support (H/F)", entreprise="MANPOWER")
+    lyon = offre("B", intitule="Technicien support (H/F)", entreprise="Randstad", lieu="69 - Lyon")
+
+    retenues, _ = prefiltrer([lille, lyon])
+
+    assert [o["id"] for o in retenues] == ["A", "B"]
+
+
+def test_doublon_meme_entreprise_autre_ville():
+    paris = offre("A", intitule="Testeur QA", entreprise="ACME", lieu="75 - Paris")
+    lyon = offre("B", intitule="Testeur QA", entreprise="ACME", lieu="69 - Lyon")
+
+    retenues, ecartees = prefiltrer([paris, lyon])
+
+    # Même intitulé et même entreprise : l'annonce est considérée comme republiée.
+    assert [o["id"] for o in retenues] == ["A"]
+    assert ecartees[0][1] == MOTIF_DOUBLON
+
+
+# ------------------------------------------- drapeaux déterministes et verdict
+
+
+def test_drapeaux_deterministes_cumules():
+    complete = offre(
+        "A",
+        entreprise="Forums Talents Handicap",
+        description="Permis B obligatoire. Formation bac+5 exigée. 5 ans minimum.",
+    )
+
+    assert drapeaux_deterministes(complete) == ["rqth", "permis", "bac5", "experience"]
+
+
+def test_aucun_drapeau_deterministe_sur_une_offre_neutre():
+    assert drapeaux_deterministes(offre("A")) == []
+
+
+def test_drapeaux_du_modele_et_de_python_se_cumulent():
+    lot = [offre("A", description="Permis B obligatoire.")]
+    resultats = [
+        {"id": "A", "score": 60, "resume": "", "drapeaux": ["teletravail"], "verdict": "peut-etre"}
+    ]
+
+    (enrichi,) = ajouter_drapeaux_deterministes(lot, resultats)
+
+    assert enrichi["drapeaux"] == ["teletravail", "permis"]
+
+
+@pytest.mark.parametrize("drapeau", ["permis", "telephone", "bac5", "freelance"])
+def test_drapeau_redhibitoire_impose_le_verdict_non(drapeau):
+    resultats = [
+        {"id": "A", "score": 95, "resume": "", "drapeaux": [drapeau], "verdict": "postuler"}
+    ]
+
+    (resultat,) = appliquer_regle_verdict(resultats)
+
+    assert resultat["verdict"] == "non"
+    # Le score du modèle est conservé : il dit l'intérêt, pas l'accessibilité.
+    assert resultat["score"] == 95
+
+
+@pytest.mark.parametrize("drapeaux", [[], ["experience"], ["rqth"], ["teletravail", "alternance"]])
+def test_verdict_conserve_sans_drapeau_redhibitoire(drapeaux):
+    resultats = [
+        {"id": "A", "score": 80, "resume": "", "drapeaux": drapeaux, "verdict": "postuler"}
+    ]
+
+    assert appliquer_regle_verdict(resultats)[0]["verdict"] == "postuler"
+
+
+def test_regle_de_verdict_appliquee_par_le_tri_d_un_lot():
+    client = FauxLLM(
+        reponses=[
+            reponse({"id": "A", "score": 90, "resume": "ok", "drapeaux": [], "verdict": "postuler"})
+        ]
+    )
+    lot = [offre("A", description="Le permis B est obligatoire pour ce poste.")]
+
+    (resultat,) = trier_lot(client, CRITERES, lot)
+
+    assert resultat["drapeaux"] == ["permis"]
+    assert resultat["verdict"] == "non"
+    assert resultat["score"] == 90
+
+
+def test_le_prompt_annonce_la_regle_des_drapeaux_redhibitoires():
+    prompt = construire_prompt(CRITERES, [offre("A")])
+
+    assert 'classée "non"' in prompt
+    for drapeau in DRAPEAUX_REDHIBITOIRES:
+        assert f'"{drapeau}"' in prompt

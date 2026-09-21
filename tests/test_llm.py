@@ -116,6 +116,13 @@ def test_delai_transmis_au_sous_processus(appel):
     assert appel["kwargs"]["timeout"] == 42
 
 
+def test_modele_par_defaut(appel):
+    llm.interroger("bonjour")
+
+    argv = appel["argv"]
+    assert argv[argv.index("--model") + 1] == llm.MODELE_DEFAUT == "sonnet"
+
+
 def test_delai_par_defaut_de_180_secondes(appel):
     llm.interroger("bonjour")
 

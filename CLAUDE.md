@@ -36,18 +36,32 @@ ce fichier. Aucun autre module n'importe `subprocess`.
 ## Tri par LLM (étape 2)
 
 - **Pré-filtre d'abord, LLM ensuite.** Tout ce qui peut être écarté gratuitement en Python doit
-  l'être : profession libérale, stage (`est_stage`), 3 ans d'expérience ou plus exigés
-  (`SEUIL_EXPERIENCE_ANNEES`), offres RQTH si `exclure_rqth`, doublons intitulé + entreprise. Le
-  nombre d'offres écartées et leur motif sont toujours affichés.
+  l'être : profession libérale, taux journalier (`est_remunere_au_jour`), stage (`est_stage`),
+  3 ans d'expérience ou plus exigés (`SEUIL_EXPERIENCE_ANNEES`), offres RQTH si `exclure_rqth`,
+  doublons. Le nombre d'offres écartées et leur motif sont toujours affichés.
+- **Deux clés de dédoublonnage** (`cles_doublon`) : intitulé normalisé + entreprise, et intitulé
+  normalisé + ville. La seconde attrape la même annonce diffusée par des intermédiaires
+  différents, que la première laissait passer.
 - **Un filtre gratuit ne doit pas coûter de bonnes offres.** `est_stage` prend l'intitulé et
   l'URL au mot, mais la description seulement sur les tournures de
   `MOTIFS_STAGE_DESCRIPTION` : chercher « stage » partout dans la description écartait 19 offres
   sur 31 à tort, dont cinq postes de formateur (« la compréhension de vos stagiaires ») et une
   offre junior (« première expérience (stage, alternance) »). Mesurer avant d'élargir un filtre.
 - **Ce qui est vérifiable mécaniquement ne va pas au LLM.** `DRAPEAUX_LLM` liste ce que le modèle
-  peut poser, `DRAPEAUX_DETERMINISTES` ce que Python pose seul (`rqth`, via l'entreprise ou
-  l'URL, dans `ajouter_drapeaux_deterministes`). Ajouter un drapeau au prompt suppose qu'aucun
-  `in` ne suffisait.
+  peut poser, `DRAPEAUX_DETERMINISTES` ce que Python pose seul : `rqth` (entreprise ou URL),
+  `permis`, `bac5` et `experience` (`exige_permis`, `exige_bac5`,
+  `exige_experience_dans_le_texte`). Les deux sources s'additionnent dans
+  `ajouter_drapeaux_deterministes` : les règles Python ne couvrent que des formulations
+  précises, le modèle attrape le reste.
+- **Chaque règle de détection a été mesurée sur les données réelles avant d'être gardée**, et les
+  faux positifs constatés sont devenus des tests : `permis/certification (requis)` sur une offre
+  de QA, « de bac à bac+5 » sur une offre de formateur, « bac, bac+2, bachelor/bac+3 ou
+  mastère/bac+5 » sur des offres d'alternance. Un filtre gratuit ne doit pas coûter de bonnes
+  offres : mesurer, échantillonner, puis élargir.
+- **Règle de verdict** (`appliquer_regle_verdict`) : un drapeau de `DRAPEAUX_REDHIBITOIRES`
+  (`permis`, `telephone`, `bac5`, `freelance`) vaut « non », quel que soit le score, qui est
+  conservé tel quel. `experience` n'en fait pas partie : cela se négocie. Le prompt annonce la
+  règle au modèle pour qu'il ne la contredise pas.
 - **Le prompt définit chaque drapeau par ce qu'il est ET ce qu'il n'est pas**, donne trois
   exemples notés et impose un tri sévère (`postuler` seulement avec une chance réelle ; les
   intitulés de `MOTS_SENIORITE` font chuter le score malgré « débutant accepté »). Le prompt est

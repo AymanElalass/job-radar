@@ -37,7 +37,7 @@ def test_config_complete(tmp_path):
         "pages_max": 2,
         "tri": {
             "criteres": None,
-            "modele": "haiku",
+            "modele": "sonnet",
             "taille_lot": 20,
             "delai_max": 180,
             "exclure_rqth": False,
@@ -146,7 +146,7 @@ def test_section_tri_absente_donne_des_valeurs_par_defaut(tmp_path):
     tri = charger_config(chemin)["tri"]
 
     assert tri["criteres"] is None
-    assert tri["modele"] == "haiku"
+    assert tri["modele"] == "sonnet"
     assert tri["taille_lot"] == 20
     assert tri["delai_max"] == 180
     assert tri["exclure_rqth"] is False

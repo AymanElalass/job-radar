@@ -17,7 +17,7 @@ from collections.abc import Callable
 ClientLLM = Callable[[str], str]
 
 COMMANDE = "claude"
-MODELE_DEFAUT = "haiku"
+MODELE_DEFAUT = "sonnet"
 
 #: Délai maximal par appel, en secondes. Au-delà, l'appel est abandonné.
 DELAI_MAX_DEFAUT = 180

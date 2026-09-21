@@ -42,7 +42,9 @@ DRAPEAUX_LLM = (
 )
 
 #: Drapeaux posés par Python, sans LLM, parce qu'ils sont vérifiables mécaniquement.
-DRAPEAUX_DETERMINISTES = ("rqth",)
+#: Le LLM peut poser les mêmes (sauf ``rqth``) sur des formulations que ces règles
+#: ne couvrent pas : les deux sources s'additionnent.
+DRAPEAUX_DETERMINISTES = ("rqth", "permis", "bac5", "experience")
 
 #: Tous les drapeaux acceptés, d'où qu'ils viennent.
 DRAPEAUX_VALIDES = (*DRAPEAUX_LLM, *DRAPEAUX_DETERMINISTES)
@@ -53,6 +55,11 @@ DRAPEAUX_ELIMINATOIRES = frozenset({"permis", "telephone", "experience", "bac5",
 #: Drapeaux valorisants : mis en avant à l'affichage.
 DRAPEAUX_BONUS = frozenset({"teletravail", "teletravail_complet"})
 
+#: Drapeaux rédhibitoires : l'offre est « non », quel que soit le score du modèle.
+#: `experience` n'en fait pas partie : une expérience demandée se négocie, pas un
+#: permis, un bac+5 ou un statut indépendant.
+DRAPEAUX_REDHIBITOIRES = frozenset({"permis", "telephone", "bac5", "freelance"})
+
 VERDICTS = ("postuler", "peut-etre", "non")
 VERDICTS_RETENUS = ("postuler", "peut-etre")
 
@@ -61,10 +68,11 @@ MARQUEURS_RQTH_ENTREPRISE = ("talents handicap",)
 MARQUEURS_RQTH_URL = ("handicap-job.com",)
 
 MOTIF_LIBERALE = "profession libérale (freelance)"
+MOTIF_TJM = "rémunéré au jour (TJM, freelance)"
 MOTIF_EXPERIENCE = f"{SEUIL_EXPERIENCE_ANNEES} ans d'expérience ou plus exigés"
 MOTIF_STAGE = "stage (convention impossible, diplôme déjà obtenu)"
 MOTIF_RQTH = "offre réservée aux travailleurs handicapés (exclure_rqth)"
-MOTIF_DOUBLON = "doublon (même intitulé, même entreprise)"
+MOTIF_DOUBLON = "doublon (même intitulé, même entreprise ou même ville)"
 
 
 class ErreurTri(RuntimeError):
@@ -144,13 +152,13 @@ def est_rqth(offre: dict[str, Any]) -> bool:
 
 
 #: Le mot « stage » dans l'intitulé ou l'URL désigne l'offre elle-même.
-MOTIF_MOT_STAGE = re.compile(r"\bstages?\b|\bstagiaires?\b")
+REGEX_MOT_STAGE = re.compile(r"\bstages?\b|\bstagiaires?\b")
 
 #: Dans la description, le mot seul ne suffit pas : « la compréhension de vos stagiaires »
 #: décrit un poste de formateur et « première expérience (stage, alternance) » un poste
 #: ouvert aux débutants — deux offres à garder. Seules ces tournures disent que l'offre
 #: EST un stage.
-MOTIFS_STAGE_DESCRIPTION = re.compile(
+REGEX_STAGE_DESCRIPTION = re.compile(
     r"\ben tant que stagiaire\b"
     r"|\bvous serez stagiaire\b"
     r"|\b(offre|contrat|convention|type de contrat) (de |d'|: ?)?stage\b"
@@ -167,20 +175,169 @@ def est_stage(offre: dict[str, Any]) -> bool:
     Un stage suppose une convention avec un établissement, impossible pour un
     candidat déjà diplômé. L'intitulé et l'URL sont pris au mot ; la description,
     elle, n'est retenue que sur des tournures qui désignent l'offre elle-même
-    (voir :data:`MOTIFS_STAGE_DESCRIPTION`).
+    (voir :data:`REGEX_STAGE_DESCRIPTION`).
     """
     for champ in ("intitule", "url"):
-        if MOTIF_MOT_STAGE.search(_sans_accents(str(offre.get(champ) or ""))):
+        if REGEX_MOT_STAGE.search(_sans_accents(str(offre.get(champ) or ""))):
             return True
 
     description = _sans_accents(str(offre.get("description") or ""))
-    return MOTIFS_STAGE_DESCRIPTION.search(description) is not None
+    return REGEX_STAGE_DESCRIPTION.search(description) is not None
 
 
-def _cle_doublon(offre: dict[str, Any]) -> tuple[str, str]:
+#: « permis B obligatoire », « permis de conduire exigé »…
+REGEX_PERMIS = re.compile(
+    r"\bpermis\b(?: de conduire)?(?: [ab]\b)?[^.;!?]{0,40}"
+    r"\b(obligatoire|exige\w*|requis\w*|indispensable|necessaire|imperatif)\b"
+    r"|\b(obligatoire|exige\w*|requis\w*|indispensable)\b[^.;!?]{0,20}\bpermis\b"
+)
+
+#: Tournures qui disent l'inverse : le permis n'est pas demandé.
+#: « permis/certification » est un intitulé de rubrique des annonces agrégées :
+#: l'exigence qui suit porte sur la certification, pas sur la conduite.
+REGEX_PERMIS_FACULTATIF = re.compile(
+    r"\bpermis\s*/"
+    r"|\b(sans|aucun|pas de|ni) permis\b"
+    r"|\bpermis\b[^.;!?]{0,30}\b(non|pas) (obligatoire|exige\w*|requis\w*|necessaire)\b"
+    r"|\bpermis\b[^.;!?]{0,20}\b(apprecie|souhaite|un plus|bienvenu)\w*\b"
+)
+
+#: Diplôme bac+5 demandé : le niveau seul ne suffit pas, il faut une exigence.
+REGEX_BAC5 = re.compile(
+    r"\b(bac\s*\+\s*5|bac\s*\+\s*[5-8]|master\s*2|master\s*ii|mastere|"
+    r"ecole d.ingenieur\w*|diplome d.ingenieur|ingenieur diplome|doctorat)\b"
+)
+
+#: Une fourchette de niveaux (« de bac à bac+5 », « bac+3 à bac+5 ») n'exige pas
+#: un bac+5 : elle décrit un éventail, souvent celui d'un public en formation.
+REGEX_FOURCHETTE_DIPLOME = re.compile(
+    r"\bbac\b\s*(\+\s*[0-4])?\s*(a|au|jusqu.a|et)\s*bac\s*\+\s*[5-8]"
+    r"|\bbac\s*\+\s*[0-4]\s*(a|au|jusqu.a|et|/|-)\s*(\+\s*)?[5-8]\b"
+    # Énumération de niveaux proposés (catalogue d'école, offres d'alternance) :
+    # « de niveau 4 à niveau 7 (bac, bac+2, bachelor/bac+3 ou mastère/bac+5) ».
+    r"|\b(bac\s*\+\s*[0-3]|bachelor)\b[^.;!?]{0,40}\b(ou|et)\b\s*"
+    r"(mastere|master|bac\s*\+\s*[5-8])"
+    r"|\bniveau\s*[0-6]\s*(a|au)\s*niveau\s*[4-8]\b"
+)
+
+#: L'exigence, à proximité du diplôme (« de formation bac+5 », « master 2 exigé »).
+REGEX_EXIGENCE_DIPLOME = re.compile(
+    r"\b(exige\w*|requis\w*|obligatoire|imperatif\w*|minimum|demande|titulaire|"
+    r"de formation|formation|niveau|diplome)\b"
+)
+
+#: « 3 ans minimum », « minimum 5 ans », « au moins 4 ans d'expérience ».
+REGEX_ANNEES_MINIMUM = re.compile(
+    r"(\d+)\s*(?:a\s*\d+\s*)?ans?\b[^.;!?]{0,30}\b(?:minimum|mini|au minimum)\b"
+    r"|\b(?:minimum|au moins|a minima)\b\D{0,15}?(\d+)\s*ans?\b"
+)
+
+#: Rémunération à la journée : marque une mission d'indépendant.
+REGEX_TJM = re.compile(
+    r"\btjm\b|\btaux journalier\b|(?:euros?|eur|\u20ac|k\u20ac)\s*(?:/|par |la )\s*jour"
+    r"|\bpar jour travaille\b"
+)
+
+
+def _texte_offre(offre: dict[str, Any], *champs: str) -> str:
+    """Concatène les champs demandés, sans accents et en minuscules."""
+    return _sans_accents(" ".join(str(offre.get(champ) or "") for champ in champs))
+
+
+def exige_permis(offre: dict[str, Any]) -> bool:
+    """Vrai si l'annonce exige le permis de conduire.
+
+    Les tournures qui le rendent facultatif (« permis apprécié », « sans permis »)
+    l'emportent : mieux vaut laisser passer une offre que jeter une offre valable.
+    """
+    texte = _texte_offre(offre, "intitule", "description")
+    if REGEX_PERMIS_FACULTATIF.search(texte):
+        return False
+    return REGEX_PERMIS.search(texte) is not None
+
+
+def exige_bac5(offre: dict[str, Any]) -> bool:
+    """Vrai si l'annonce demande un bac+5, un master 2 ou un diplôme d'ingénieur.
+
+    La mention du diplôme ne suffit pas : elle doit être accompagnée d'une exigence
+    dans la même phrase, sinon « parcours bac+3 à bac+5 » suffirait à écarter l'offre.
+    """
+    texte = _texte_offre(offre, "intitule", "description")
+
+    for correspondance in REGEX_BAC5.finditer(texte):
+        debut = max(0, correspondance.start() - 80)
+        phrase = texte[debut : correspondance.end() + 40]
+        if REGEX_FOURCHETTE_DIPLOME.search(phrase):
+            continue
+        if REGEX_EXIGENCE_DIPLOME.search(phrase):
+            return True
+    return False
+
+
+def exige_experience_dans_le_texte(offre: dict[str, Any]) -> bool:
+    """Vrai si la description réclame :data:`SEUIL_EXPERIENCE_ANNEES` ans au minimum.
+
+    Complète :func:`exige_experience_longue`, qui ne lit que le libellé de l'API :
+    beaucoup d'annonces affichent « débutant accepté » puis demandent « 5 ans minimum ».
+    """
+    texte = _texte_offre(offre, "description")
+
+    for correspondance in REGEX_ANNEES_MINIMUM.finditer(texte):
+        annees = correspondance.group(1) or correspondance.group(2)
+        if annees and int(annees) >= SEUIL_EXPERIENCE_ANNEES:
+            return True
+    return False
+
+
+def est_remunere_au_jour(offre: dict[str, Any]) -> bool:
+    """Vrai si la rémunération est un taux journalier : mission d'indépendant."""
+    return REGEX_TJM.search(_texte_offre(offre, "salaire", "description")) is not None
+
+
+def drapeaux_deterministes(offre: dict[str, Any]) -> list[str]:
+    """Drapeaux que Python pose seul, dans l'ordre de :data:`DRAPEAUX_DETERMINISTES`."""
+    detections = {
+        "rqth": est_rqth,
+        "permis": exige_permis,
+        "bac5": exige_bac5,
+        "experience": exige_experience_dans_le_texte,
+    }
+    return [drapeau for drapeau in DRAPEAUX_DETERMINISTES if detections[drapeau](offre)]
+
+
+#: Mentions de genre à retirer d'un intitulé avant comparaison.
+REGEX_MENTION_GENRE = re.compile(r"\(?\b[hf]\s*/\s*[fh]\b\)?")
+
+#: Préfixe de département d'un lieu : « 59 - Lille ».
+REGEX_PREFIXE_DEPARTEMENT = re.compile(r"^\s*\d{2,3}\s*-\s*")
+
+
+def _normaliser(texte: str) -> str:
+    """Minuscules, sans accents, ponctuation réduite à des espaces simples."""
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", _sans_accents(texte)).split())
+
+
+def normaliser_intitule(intitule: str | None) -> str:
+    """Intitulé comparable : sans accents, sans « (H/F) », sans ponctuation."""
+    return _normaliser(REGEX_MENTION_GENRE.sub(" ", _sans_accents(intitule or "")))
+
+
+def normaliser_ville(lieu: str | None) -> str:
+    """Ville comparable, débarrassée du préfixe de département de l'API."""
+    return _normaliser(REGEX_PREFIXE_DEPARTEMENT.sub("", _sans_accents(lieu or "")))
+
+
+def cles_doublon(offre: dict[str, Any]) -> tuple[tuple[str, ...], ...]:
+    """Clés sous lesquelles une offre peut être reconnue comme déjà vue.
+
+    Deux clés, parce que deux situations : la même annonce republiée par la même
+    entreprise, et la même annonce diffusée par des intermédiaires différents —
+    auquel cas seuls l'intitulé et la ville se ressemblent.
+    """
+    intitule = normaliser_intitule(offre.get("intitule"))
     return (
-        _sans_accents(offre.get("intitule") or "").strip(),
-        _sans_accents(offre.get("entreprise") or "").strip(),
+        ("entreprise", intitule, _normaliser(offre.get("entreprise") or "")),
+        ("ville", intitule, normaliser_ville(offre.get("lieu"))),
     )
 
 
@@ -194,10 +351,14 @@ def prefiltrer(
     du bruit avant de dépenser du quota. Avec ``exclure_rqth``, les offres des
     canaux réservés aux travailleurs handicapés sont écartées ; sinon elles sont
     conservées et porteront le drapeau ``rqth``.
+
+    Une offre rémunérée au taux journalier est écartée comme une profession
+    libérale : le contrat annoncé a beau être un CDI, la mission est celle d'un
+    indépendant.
     """
     retenues: list[dict[str, Any]] = []
     ecartees: list[tuple[dict[str, Any], str]] = []
-    deja_vues: set[tuple[str, str]] = set()
+    deja_vues: set[tuple[str, ...]] = set()
 
     for offre in offres:
         if est_profession_liberale(offre):
@@ -209,16 +370,19 @@ def prefiltrer(
         if exige_experience_longue(offre):
             ecartees.append((offre, MOTIF_EXPERIENCE))
             continue
+        if est_remunere_au_jour(offre):
+            ecartees.append((offre, MOTIF_TJM))
+            continue
         if exclure_rqth and est_rqth(offre):
             ecartees.append((offre, MOTIF_RQTH))
             continue
 
-        cle = _cle_doublon(offre)
-        if cle in deja_vues:
+        cles = cles_doublon(offre)
+        if any(cle in deja_vues for cle in cles):
             ecartees.append((offre, MOTIF_DOUBLON))
             continue
 
-        deja_vues.add(cle)
+        deja_vues.update(cles)
         retenues.append(offre)
 
     return retenues, ecartees
@@ -308,6 +472,8 @@ d'isoler les rares offres où ce candidat a une vraie chance :
 - Un poste qui exige des compétences ou des responsabilités qu'un débutant ne peut pas
   tenir n'est pas "postuler", quoi qu'affiche le champ « expérience ».
 - Un métier sans rapport avec le profil se note bas, sans chercher de rapprochement.
+- Une offre qui mérite l'un des drapeaux "permis", "telephone", "bac5" ou "freelance"
+  sera de toute façon classée "non" : ne lui donne pas le verdict "postuler".
 
 Pour chacune des {{nombre}} offres ci-dessous, produis un objet JSON avec :
 - "id" : l'identifiant de l'offre, recopié tel quel
@@ -427,15 +593,32 @@ def ajouter_drapeaux_deterministes(
 ) -> list[dict[str, Any]]:
     """Ajoute aux résultats les drapeaux que Python sait poser seul.
 
-    Le LLM ne se prononce pas sur ``rqth`` : l'information est dans l'entreprise ou
-    l'URL de l'offre, donc vérifiable sans lui — et sans risque d'oubli.
+    Ces drapeaux s'ajoutent à ceux du modèle : les règles Python ne couvrent que
+    des formulations précises, le modèle attrape le reste.
     """
     par_id = {offre["id"]: offre for offre in lot}
 
     for resultat in resultats:
         offre = par_id.get(resultat["id"])
-        if offre is not None and est_rqth(offre) and "rqth" not in resultat["drapeaux"]:
-            resultat["drapeaux"].append("rqth")
+        if offre is None:
+            continue
+        for drapeau in drapeaux_deterministes(offre):
+            if drapeau not in resultat["drapeaux"]:
+                resultat["drapeaux"].append(drapeau)
+
+    return resultats
+
+
+def appliquer_regle_verdict(resultats: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Force le verdict « non » sur les offres portant un drapeau rédhibitoire.
+
+    Le score du modèle est conservé tel quel : il dit l'intérêt du poste, pas
+    l'accessibilité. Un permis, un bac+5 ou un statut indépendant ferment la porte,
+    quel que soit cet intérêt.
+    """
+    for resultat in resultats:
+        if DRAPEAUX_REDHIBITOIRES.intersection(resultat["drapeaux"]):
+            resultat["verdict"] = "non"
 
     return resultats
 
@@ -452,7 +635,7 @@ def trier_lot(client: ClientLLM, criteres: str, lot: list[dict[str, Any]]) -> li
         # puis on abandonne ce lot pour ne pas bloquer les suivants.
         notees = valider_reponse(client(prompt), ids)
 
-    return ajouter_drapeaux_deterministes(lot, notees)
+    return appliquer_regle_verdict(ajouter_drapeaux_deterministes(lot, notees))
 
 
 def trier(

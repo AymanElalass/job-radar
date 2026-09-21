@@ -30,7 +30,7 @@ pages_max = 2
 criteres = "~/Documents/cv/criteres-tri.md"
 
 # Modèle passé à `claude -p --model`.
-modele = "haiku"
+modele = "sonnet"
 
 # Nombre d'offres envoyées au modèle en une fois.
 taille_lot = 20
