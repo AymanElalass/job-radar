@@ -41,6 +41,15 @@ ce fichier. Aucun autre module n'importe `subprocess`.
 - **Lots de 20** (`taille_lot`), et seulement les champs de `CHAMPS_ENVOYES` plus les
   `LONGUEUR_DESCRIPTION` (800) premiers caractères de la description : on n'envoie pas une offre
   entière au modèle.
+- **`claude -p` doit rester un simple appel de modèle.** `llm.OPTIONS_ISOLEMENT` coupe les outils,
+  les serveurs MCP, les skills, les autorisations interactives, la persistance de session, ainsi
+  que `CLAUDE.md` et les hooks du dossier courant ; `llm.ENVIRONNEMENT` coupe le raisonnement
+  étendu (`MAX_THINKING_TOKENS=0`). Ne pas retirer ces options sans mesurer : sans elles, un lot
+  de 20 offres prenait 64 s (et jusqu'à 145 s) contre ~19 s, avec 31 400 jetons d'en-tête au lieu
+  de 7 900, et un appel d'outil pouvait attendre une autorisation que personne ne donne en `-p`.
+- **Un lot ne bloque jamais la passe** : au-delà de `delai_max` secondes (180 par défaut) il est
+  abandonné, signalé, et les suivants partent. Un délai dépassé n'est **pas** réessayé — seule
+  une réponse mal formée mérite une seconde tentative.
 - **Réponse JSON strictement validée** (`valider_reponse`) : id connu, score entier 0-100,
   verdict parmi `postuler` / `peut-etre` / `non`. Les drapeaux inconnus sont ignorés — une
   invention du modèle sur ce point ne justifie pas de jeter un lot. En cas de réponse

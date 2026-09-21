@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import unicodedata
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
-from job_radar.llm import ClientLLM
+from job_radar.llm import ClientLLM, ErreurLLM
 
 #: Nombre d'offres envoyées en une fois au LLM.
 TAILLE_LOT_DEFAUT = 20
@@ -317,24 +318,39 @@ def trier(
     criteres: str,
     offres: list[dict[str, Any]],
     taille_lot: int = TAILLE_LOT_DEFAUT,
-    rappel: Callable[[int, int, int], None] | None = None,
+    rappel_debut: Callable[[int, int, int], None] | None = None,
+    rappel_fin: Callable[[int, int, float, int, str | None], None] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Trie toutes les offres, lot par lot.
 
     Renvoie les résultats obtenus et la liste des lots en erreur (décrits en clair).
-    Un lot en échec ne compromet pas les autres.
+    Un lot en échec — réponse inexploitable comme délai dépassé — ne compromet pas
+    les autres. ``rappel_debut`` est appelé avant chaque lot, ``rappel_fin`` après,
+    avec le temps écoulé.
     """
     resultats: list[dict[str, Any]] = []
     erreurs: list[str] = []
 
     lots = list(decouper_en_lots(offres, taille_lot))
     for numero, lot in enumerate(lots, start=1):
-        if rappel is not None:
-            rappel(numero, len(lots), len(lot))
+        if rappel_debut is not None:
+            rappel_debut(numero, len(lots), len(lot))
+
+        depart = time.monotonic()
+        notees: list[dict[str, Any]] = []
+        motif: str | None = None
         try:
-            resultats.extend(trier_lot(client, criteres, lot))
-        except ErreurTri as erreur:
-            erreurs.append(f"lot {numero}/{len(lots)} ({len(lot)} offres) : {erreur}")
+            notees = trier_lot(client, criteres, lot)
+        except (ErreurTri, ErreurLLM) as erreur:
+            # Un lot abandonné (JSON inexploitable, délai dépassé, CLI en échec)
+            # est signalé, et les lots suivants partent quand même.
+            motif = str(erreur)
+            erreurs.append(f"lot {numero}/{len(lots)} ({len(lot)} offres) : {motif}")
+
+        duree = time.monotonic() - depart
+        resultats.extend(notees)
+        if rappel_fin is not None:
+            rappel_fin(numero, len(lots), duree, len(notees), motif)
 
     return resultats, erreurs
 

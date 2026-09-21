@@ -34,3 +34,7 @@ modele = "haiku"
 
 # Nombre d'offres envoyées au modèle en une fois.
 taille_lot = 20
+
+# Délai maximal par lot, en secondes. Au-delà, le lot est abandonné et signalé,
+# et les lots suivants partent quand même.
+delai_max = 180

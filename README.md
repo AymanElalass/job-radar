@@ -35,7 +35,8 @@ une candidature.
 3. Le modèle renvoie, pour chaque offre, un **score sur 100**, un résumé de deux lignes, des
    **drapeaux** et un **verdict** (`postuler`, `peut-etre`, `non`). La réponse JSON est validée ;
    en cas de réponse inexploitable, une seule nouvelle tentative, puis le lot est signalé en
-   erreur sans bloquer les autres.
+   erreur sans bloquer les autres. Un lot qui dépasse `delai_max` secondes est abandonné de la
+   même façon. Le temps écoulé est affiché pour chaque lot.
 4. Les verdicts sont stockés en SQLite : **une offre n'est jamais triée deux fois**.
 5. Affichage d'un tableau trié par score décroissant et écriture de `data/selection.json`
    (offres `postuler` et `peut-etre`).
@@ -94,7 +95,8 @@ Le tri par LLM se règle dans le même fichier :
 [tri]
 criteres = "~/Documents/cv/criteres-tri.md"   # fichier Markdown, hors du dépôt
 modele = "haiku"                              # modèle passé à `claude -p --model`
-taille_lot = 20                                # offres envoyées en une fois
+taille_lot = 20                               # offres envoyées en une fois
+delai_max = 180                               # secondes par lot, au-delà le lot est abandonné
 ```
 
 ### Fichier de critères
@@ -110,6 +112,15 @@ cp criteres.example.md ~/Documents/cv/criteres-tri.md
 
 Le tri suppose la CLI [Claude Code](https://claude.com/claude-code) installée et authentifiée
 (`claude`), puisque l'appel se fait via `claude -p`.
+
+L'appel est volontairement réduit à un **simple appel de modèle** : aucun outil
+(`--tools ""`), aucun serveur MCP (`--strict-mcp-config`), aucune skill
+(`--disable-slash-commands`), rien qui puisse réclamer une autorisation
+(`--permission-prompts none`), pas de session écrite sur le disque
+(`--no-session-persistence`), ni `CLAUDE.md` ni hooks hérités du dossier courant
+(`--safe-mode`), un prompt système minimal et le raisonnement étendu coupé
+(`MAX_THINKING_TOKENS=0`). Sur un lot de 20 offres, cela fait passer l'appel de
+**64 s à environ 19 s** et l'en-tête de **31 400 à 7 900 jetons**.
 
 ## Usage
 
@@ -188,8 +199,10 @@ $ uv run job-radar trier --limite 20
   - 4 × 3 ans d'expérience ou plus exigés
   - 3 × profession libérale (freelance)
 
-Tri de 13 offre(s) par haiku en 1 lot(s) :
+Tri de 13 offre(s) par haiku en 1 lot(s), 180 s au plus par lot :
   lot 1/1 (13 offres) → haiku…
+  lot 1/1 : 13 offre(s) notée(s) en 18.7 s
+  total : 18.7 s
 
                       Offres triées par score décroissant
 ┏━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━┓

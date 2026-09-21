@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import tomllib
 from collections import Counter
 from pathlib import Path
@@ -24,7 +25,7 @@ from job_radar.client import (
     normaliser_mot_cle,
     reduire_offre,
 )
-from job_radar.llm import MODELE_DEFAUT, creer_client
+from job_radar.llm import DELAI_MAX_DEFAUT, MODELE_DEFAUT, creer_client
 from job_radar.stockage import CHEMIN_BASE_DEFAUT, Historique
 from job_radar.tri import (
     DRAPEAUX_BONUS,
@@ -90,6 +91,7 @@ def charger_config(chemin: str | Path = CHEMIN_CONFIG_DEFAUT) -> dict[str, Any]:
             "criteres": str(tri["criteres"]) if tri.get("criteres") else None,
             "modele": str(tri.get("modele") or MODELE_DEFAUT),
             "taille_lot": max(1, int(tri.get("taille_lot", TAILLE_LOT_DEFAUT))),
+            "delai_max": max(1, int(tri.get("delai_max", DELAI_MAX_DEFAUT))),
         },
     }
 
@@ -401,23 +403,40 @@ def commande_trier(args: argparse.Namespace, config: dict[str, Any]) -> int:
             console.print(
                 f"\n[bold]Simulation[/bold] : {len(retenues)} offre(s) partiraient au "
                 f"modèle [bold]{modele}[/bold] en {len(lots)} lot(s) de "
-                f"{reglages['taille_lot']} au maximum. Rien n'a été envoyé."
+                f"{reglages['taille_lot']} au maximum, avec un délai de "
+                f"{reglages['delai_max']} s par lot. Rien n'a été envoyé."
             )
             return 0
 
-        def progression(numero: int, total: int, taille: int) -> None:
+        def debut_de_lot(numero: int, total: int, taille: int) -> None:
             console.print(f"  lot {numero}/{total} ({taille} offres) → {modele}…")
 
+        def fin_de_lot(
+            numero: int, total: int, duree: float, notees: int, motif: str | None
+        ) -> None:
+            if motif is None:
+                console.print(
+                    f"  lot {numero}/{total} : {notees} offre(s) notée(s) en {duree:.1f} s"
+                )
+            else:
+                console.print(
+                    f"  [red]lot {numero}/{total} : abandonné après {duree:.1f} s[/red] ({motif})"
+                )
+
         console.print(
-            f"\nTri de {len(retenues)} offre(s) par [bold]{modele}[/bold] en {len(lots)} lot(s) :"
+            f"\nTri de {len(retenues)} offre(s) par [bold]{modele}[/bold] en "
+            f"{len(lots)} lot(s), {reglages['delai_max']} s au plus par lot :"
         )
+        depart = time.monotonic()
         resultats, erreurs = trier(
-            creer_client(modele),
+            creer_client(modele, delai_max=reglages["delai_max"]),
             criteres,
             retenues,
             taille_lot=reglages["taille_lot"],
-            rappel=progression,
+            rappel_debut=debut_de_lot,
+            rappel_fin=fin_de_lot,
         )
+        console.print(f"  total : {time.monotonic() - depart:.1f} s")
         historique.enregistrer_tri(resultats, modele)
 
     for erreur in erreurs:

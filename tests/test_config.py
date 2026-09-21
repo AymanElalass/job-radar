@@ -35,7 +35,12 @@ def test_config_complete(tmp_path):
         "departements": ["75", "92"],
         "publiee_depuis": 3,
         "pages_max": 2,
-        "tri": {"criteres": None, "modele": "haiku", "taille_lot": 20},
+        "tri": {
+            "criteres": None,
+            "modele": "haiku",
+            "taille_lot": 20,
+            "delai_max": 180,
+        },
     }
 
 
@@ -114,6 +119,7 @@ def test_section_tri_lue(tmp_path):
         criteres = "~/Documents/cv/criteres-tri.md"
         modele = "sonnet"
         taille_lot = 10
+        delai_max = 90
         """,
     )
 
@@ -121,6 +127,7 @@ def test_section_tri_lue(tmp_path):
         "criteres": "~/Documents/cv/criteres-tri.md",
         "modele": "sonnet",
         "taille_lot": 10,
+        "delai_max": 90,
     }
 
 
@@ -138,6 +145,7 @@ def test_section_tri_absente_donne_des_valeurs_par_defaut(tmp_path):
     assert tri["criteres"] is None
     assert tri["modele"] == "haiku"
     assert tri["taille_lot"] == 20
+    assert tri["delai_max"] == 180
 
 
 def test_publiee_depuis_invalide_refuse(tmp_path):

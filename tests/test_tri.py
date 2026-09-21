@@ -8,6 +8,7 @@ import json
 import pytest
 
 from faux_reseau import FauxLLM
+from job_radar.llm import ErreurLLM
 from job_radar.tri import (
     LONGUEUR_DESCRIPTION,
     MOTIF_DOUBLON,
@@ -343,7 +344,7 @@ def test_tri_de_plusieurs_lots():
     assert client.appels == 2
 
 
-def test_progression_rapportee_lot_par_lot():
+def test_progression_rapportee_avant_chaque_lot():
     etapes = []
     client = FauxLLM(
         reponses=[
@@ -357,7 +358,7 @@ def test_progression_rapportee_lot_par_lot():
         CRITERES,
         [offre("A"), offre("B")],
         taille_lot=1,
-        rappel=lambda numero, total, taille: etapes.append((numero, total, taille)),
+        rappel_debut=lambda numero, total, taille: etapes.append((numero, total, taille)),
     )
 
     assert etapes == [(1, 2, 1), (2, 2, 1)]
@@ -407,3 +408,79 @@ def test_fichier_de_criteres_vide(tmp_path):
 
     with pytest.raises(ErreurTri, match="vide"):
         charger_criteres(chemin)
+
+
+# --------------------------------------------------- délai dépassé par lot
+
+
+class ClientLent:
+    """Client LLM qui échoue comme un appel dont le délai est dépassé."""
+
+    def __init__(self, echecs: int) -> None:
+        self.echecs = echecs
+        self.appels = 0
+
+    def __call__(self, prompt: str) -> str:
+        self.appels += 1
+        if self.appels <= self.echecs:
+            raise ErreurLLM("délai dépassé : pas de réponse de claude après 180 s")
+        return reponse(
+            {"id": "B", "score": 60, "resume": "ok", "drapeaux": [], "verdict": "peut-etre"}
+        )
+
+
+def test_lot_abandonne_sur_delai_depasse_les_suivants_continuent():
+    client = ClientLent(echecs=1)
+
+    resultats, erreurs = trier(client, CRITERES, [offre("A"), offre("B")], taille_lot=1)
+
+    assert [r["id"] for r in resultats] == ["B"]
+    assert len(erreurs) == 1
+    assert "délai dépassé" in erreurs[0]
+    assert "lot 1/2" in erreurs[0]
+
+
+def test_pas_de_seconde_tentative_apres_un_delai_depasse():
+    client = ClientLent(echecs=2)
+
+    resultats, erreurs = trier(client, CRITERES, [offre("A")], taille_lot=1)
+
+    # Réessayer un appel trop lent ne ferait qu'attendre deux fois.
+    assert client.appels == 1
+    assert resultats == []
+    assert len(erreurs) == 1
+
+
+def test_duree_rapportee_apres_chaque_lot():
+    bilans = []
+    client = FauxLLM(reponses=[VALIDE_A])
+
+    trier(
+        client,
+        CRITERES,
+        [offre("A")],
+        taille_lot=1,
+        rappel_fin=lambda numero, total, duree, notees, motif: bilans.append(
+            (numero, total, notees, motif, duree)
+        ),
+    )
+
+    (numero, total, notees, motif, duree) = bilans[0]
+    assert (numero, total, notees, motif) == (1, 1, 1, None)
+    assert duree >= 0.0
+
+
+def test_motif_rapporte_quand_le_lot_est_abandonne():
+    bilans = []
+
+    trier(
+        ClientLent(echecs=1),
+        CRITERES,
+        [offre("A")],
+        taille_lot=1,
+        rappel_fin=lambda numero, total, duree, notees, motif: bilans.append((notees, motif)),
+    )
+
+    notees, motif = bilans[0]
+    assert notees == 0
+    assert "délai dépassé" in motif
