@@ -134,6 +134,9 @@ def _lire_recherche(bloc: dict[str, Any], chemin: Path) -> dict[str, Any]:
         "distance": int(distance) if distance is not None else None,
         "publiee_depuis": publiee_depuis,
         "pages_max": max(1, int(bloc.get("pages_max", 1))),
+        # Recherche par mots-clés de télétravail : les offres qui en viennent ne
+        # seront gardées que si elles annoncent un télétravail complet.
+        "teletravail_complet": bool(bloc.get("teletravail_complet", False)),
     }
 
 
@@ -166,6 +169,10 @@ def collecter(
     une seule requête quand ni l'un ni l'autre n'est précisé, par exemple autour d'une
     commune. Une recherche en échec est signalée sans interrompre les suivantes ; un
     refus d'authentification, lui, remonte immédiatement (`ErreurAuthentification`).
+
+    Une recherche qui remplit toutes ses pages est signalée : l'API plafonne la
+    pagination, donc des offres restent hors de portée et il faut resserrer la zone
+    ou la fenêtre de publication.
     """
     offres: dict[str, dict[str, Any]] = {}
 
@@ -176,6 +183,13 @@ def collecter(
 
         for mot in mots:
             for departement in zones:
+                description = decrire_recherche(
+                    mot, departement, recherche["commune"], recherche["distance"]
+                )
+                recuperees = 0
+                total = None
+                sature = False
+
                 for page in range(recherche["pages_max"]):
                     try:
                         resultats = client.rechercher(
@@ -190,22 +204,37 @@ def collecter(
                         print(f"  ! {erreur}", file=sys.stderr)
                         break
 
+                    total = client.dernier_total if total is None else total
+                    recuperees += len(resultats)
                     if bavard:
-                        description = decrire_recherche(
-                            mot, departement, recherche["commune"], recherche["distance"]
-                        )
                         print(f"  {description} / page {page + 1} : {len(resultats)} offres")
 
                     for brute in resultats:
                         offre = reduire_offre(brute)
-                        if offre["id"]:
-                            offres.setdefault(offre["id"], offre)
+                        if not offre["id"]:
+                            continue
+                        offre["teletravail_complet_exige"] = recherche["teletravail_complet"]
+                        offres.setdefault(offre["id"], offre)
 
                     # Page incomplète : inutile de demander la suivante.
                     if len(resultats) < TAILLE_PAGE:
                         break
+                    # Dernière page demandée et toujours pleine : il en reste.
+                    sature = page == recherche["pages_max"] - 1
+
+                if sature:
+                    print(_message_saturation(description, recuperees, total))
 
     return list(offres.values())
+
+
+def _message_saturation(description: str, recuperees: int, total: int | None) -> str:
+    """Prévient qu'une recherche a rempli toutes ses pages, donc qu'elle perd des offres."""
+    reste = f" sur {total} trouvée(s) par l'API" if total is not None else ""
+    return (
+        f"  ! saturation : {description} a rempli ses pages avec {recuperees} offre(s)"
+        f"{reste}. Resserrez la zone, la fenêtre de publication, ou augmentez pages_max."
+    )
 
 
 def afficher(offres: list[dict[str, Any]]) -> None:

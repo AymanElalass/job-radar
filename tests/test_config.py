@@ -6,7 +6,7 @@ import pytest
 
 from faux_reseau import FauxClient
 from job_radar.cli import ErreurConfiguration, charger_config, collecter
-from job_radar.client import ErreurAuthentification, ErreurRecherche
+from job_radar.client import TAILLE_PAGE, ErreurAuthentification, ErreurRecherche
 
 
 def ecrire_config(tmp_path, contenu: str):
@@ -40,6 +40,7 @@ def test_config_complete(tmp_path):
             "distance": None,
             "publiee_depuis": 3,
             "pages_max": 2,
+            "teletravail_complet": False,
         }
     ]
     assert config["chemins"] == {"base": None, "nouvelles": None, "selection": None}
@@ -209,6 +210,7 @@ def config(**surcharges):
         "distance": None,
         "publiee_depuis": 7,
         "pages_max": 1,
+        "teletravail_complet": False,
     } | surcharges
     return {"recherches": [recherche]}
 
@@ -309,6 +311,7 @@ def test_plusieurs_recherches(tmp_path):
         "distance": 30,
         "publiee_depuis": 14,
         "pages_max": 7,
+        "teletravail_complet": False,
     }
     assert recherches[1]["mots_cles"] == ["full remote"]
     assert recherches[1]["commune"] is None
@@ -443,6 +446,7 @@ def test_toutes_les_recherches_sont_lancees_et_dedoublonnees():
                 "distance": 30,
                 "publiee_depuis": 14,
                 "pages_max": 1,
+                "teletravail_complet": False,
             },
             {
                 "mots_cles": ["full remote"],
@@ -451,6 +455,7 @@ def test_toutes_les_recherches_sont_lancees_et_dedoublonnees():
                 "distance": None,
                 "publiee_depuis": 14,
                 "pages_max": 1,
+                "teletravail_complet": True,
             },
         ]
     }
@@ -462,3 +467,112 @@ def test_toutes_les_recherches_sont_lancees_et_dedoublonnees():
         ("66008", None),
         (None, "full remote"),
     ]
+
+
+# ------------------------------------ provenance et saturation de la pagination
+
+
+def test_provenance_teletravail_marquee_sur_les_offres():
+    client = FauxClient(
+        resultats_par_appel=[
+            [{"id": "A", "intitule": "Poste local"}],
+            [{"id": "B", "intitule": "Poste remote"}],
+        ]
+    )
+    configuration = {
+        "recherches": [
+            {
+                "mots_cles": [],
+                "departements": [],
+                "commune": "66008",
+                "distance": 15,
+                "publiee_depuis": 14,
+                "pages_max": 1,
+                "teletravail_complet": False,
+            },
+            {
+                "mots_cles": ["full remote"],
+                "departements": [],
+                "commune": None,
+                "distance": None,
+                "publiee_depuis": 14,
+                "pages_max": 1,
+                "teletravail_complet": True,
+            },
+        ]
+    }
+
+    offres = {o["id"]: o for o in collecter(client, configuration, bavard=False)}
+
+    assert offres["A"]["teletravail_complet_exige"] is False
+    assert offres["B"]["teletravail_complet_exige"] is True
+
+
+def test_offre_trouvee_par_deux_recherches_garde_la_premiere_provenance():
+    # La recherche géographique passe avant : une offre locale qui ressort aussi
+    # sur « full remote » n'est pas soumise à la règle du télétravail.
+    client = FauxClient(
+        resultats_par_appel=[
+            [{"id": "A", "intitule": "Poste"}],
+            [{"id": "A", "intitule": "Poste"}],
+        ]
+    )
+    configuration = {
+        "recherches": [
+            {
+                "mots_cles": [],
+                "departements": [],
+                "commune": "66008",
+                "distance": 15,
+                "publiee_depuis": 14,
+                "pages_max": 1,
+                "teletravail_complet": False,
+            },
+            {
+                "mots_cles": ["full remote"],
+                "departements": [],
+                "commune": None,
+                "distance": None,
+                "publiee_depuis": 14,
+                "pages_max": 1,
+                "teletravail_complet": True,
+            },
+        ]
+    }
+
+    (offre,) = collecter(client, configuration, bavard=False)
+
+    assert offre["teletravail_complet_exige"] is False
+
+
+def test_saturation_signalee(capsys):
+    # Deux pages pleines alors que pages_max valait 2 : il reste des offres.
+    pleine = [{"id": f"ID{i}", "intitule": "Poste"} for i in range(TAILLE_PAGE)]
+    suivante = [{"id": f"ID{i}", "intitule": "Poste"} for i in range(TAILLE_PAGE, 2 * TAILLE_PAGE)]
+    client = FauxClient(resultats_par_appel=[pleine, suivante])
+    client.dernier_total = 1834
+
+    collecter(client, config(mots_cles=[], commune="66008", distance=15, pages_max=2), bavard=False)
+
+    sortie = capsys.readouterr().out
+    assert "saturation" in sortie
+    assert "commune 66008 (15 km)" in sortie
+    assert "300 offre(s)" in sortie
+    assert "1834" in sortie
+
+
+def test_pas_de_saturation_quand_la_derniere_page_est_incomplete(capsys):
+    pleine = [{"id": f"ID{i}", "intitule": "Poste"} for i in range(TAILLE_PAGE)]
+    client = FauxClient(resultats_par_appel=[pleine, [{"id": "DERNIERE", "intitule": "Poste"}]])
+
+    collecter(client, config(commune="66008", pages_max=3), bavard=False)
+
+    assert "saturation" not in capsys.readouterr().out
+
+
+def test_pas_de_saturation_sur_une_seule_page_incomplete(capsys):
+    client = FauxClient(resultats_par_appel=[[{"id": "A", "intitule": "Poste"}]])
+
+    collecter(client, config(), bavard=False)
+
+    assert "saturation" not in capsys.readouterr().out

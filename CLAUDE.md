@@ -115,6 +115,16 @@ et ses critères : rien ne se mélange, et **modifier un mode ne doit pas touche
   recherche ramènerait toutes les offres de France, et la configuration est refusée.
 - `[chemins]` (base, nouvelles, selection) fixe les fichiers du mode ; les options `--base` et
   `--sortie` restent prioritaires (`resoudre_chemin`).
+- **La pagination de l'API plafonne à ~1050 offres par recherche.** Une recherche qui remplit
+  toutes ses pages perd des offres : `collecter` le signale avec le total lu dans l'en-tête
+  `Content-Range` (`total_disponible`). La réponse est de découper la zone, pas d'ignorer le
+  message — c'est ce qui a fait passer Argelès d'un rayon de 30 km à deux recherches
+  (Argelès 15 km, Perpignan 10 km), dédoublonnées ensemble par identifiant.
+- `teletravail_complet = true` sur un bloc de recherche marque ses offres
+  (`teletravail_complet_exige`), et le pré-filtre n'en garde que celles dont le texte annonce un
+  poste entièrement à distance (`est_teletravail_complet`). La provenance est portée par l'offre
+  parce que la règle ne vaut que pour ces recherches ; le dédoublonnage garde la première
+  provenance rencontrée, donc l'ordre des blocs compte (le géographique d'abord).
 - `[tri].experience_max` règle la sévérité sur l'expérience : au-delà, écartée ; entre
   `SEUIL_EXPERIENCE_ANNEES` et ce plafond, gardée avec le drapeau `experience`.
 

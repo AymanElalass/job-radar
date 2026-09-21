@@ -99,6 +99,7 @@ def motif_experience(experience_max: int = EXPERIENCE_MAX_DEFAUT) -> str:
 
 MOTIF_STAGE = "stage (convention impossible, diplôme déjà obtenu)"
 MOTIF_PERMIS = "permis de conduire exigé"
+MOTIF_TELETRAVAIL_PARTIEL = "télétravail partiel"
 MOTIF_BAC5 = "bac+5 ou diplôme d'ingénieur exigé"
 MOTIF_RQTH = "offre réservée aux travailleurs handicapés (exclure_rqth)"
 MOTIF_DOUBLON = "doublon (même intitulé, même entreprise ou même ville)"
@@ -181,6 +182,34 @@ def code_rome_retenu(offre: dict[str, Any], codes: Sequence[str] = CODES_ROME_DE
         return True
 
     return any(rome.startswith(code.strip().upper()) for code in codes)
+
+
+#: Formulations qui annoncent un télétravail intégral. Les recherches par mots-clés
+#: ramènent beaucoup d'offres simplement « ouvertes au télétravail » : seules ces
+#: tournures disent que le poste se fait entièrement à distance.
+REGEX_TELETRAVAIL_COMPLET = re.compile(
+    r"\b100\s*%?\s*(?:de\s*)?(?:teletravail|remote|a distance|distanciel)\b"
+    r"|\b(?:teletravail|remote|distanciel)\s*(?:a|:)?\s*100\s*%"
+    r"|\bfull\s*(?:remote|teletravail|distanciel)\b"
+    r"|\bfully\s*remote\b"
+    r"|\bremote\s*(?:total|complet|integral|first)\w*\b"
+    r"|\bteletravail\s*(?:total|complet|integral|permanent|exclusif)\w*\b"
+    r"|\b(?:entierement|totalement|integralement|exclusivement|full)\s*"
+    r"(?:en\s*)?(?:a\s*distance|teletravaille?|remote)\b"
+    r"|\bteletravail\s*(?:de\s*)?5\s*(?:j|jours?)\s*(?:/|sur)\s*5\b"
+    r"|\b5\s*(?:j|jours?)\s*(?:/|sur)\s*5\s*(?:de\s*)?teletravail\b"
+    r"|\b(?:poste|mission|emploi)\s*(?:100\s*%\s*)?(?:en\s*)?remote\b"
+)
+
+
+def est_teletravail_complet(offre: dict[str, Any]) -> bool:
+    """Vrai si l'annonce dit explicitement que le poste se fait entièrement à distance.
+
+    « Télétravail possible » ou « deux jours par semaine » ne comptent pas : une
+    recherche sur « full remote » ramène surtout des offres hybrides.
+    """
+    texte = _texte_offre(offre, "intitule", "description")
+    return REGEX_TELETRAVAIL_COMPLET.search(texte) is not None
 
 
 def est_rqth(offre: dict[str, Any]) -> bool:
@@ -477,12 +506,21 @@ def prefiltrer(
     Les exigences que Python sait lire — permis, bac+5, durée d'expérience — écartent
     l'offre ici plutôt que de la faire noter puis recaler par la règle de verdict :
     autant ne pas la payer.
+
+    Une offre portant ``teletravail_complet_exige`` vient d'une recherche par mots-clés
+    de télétravail : elle n'est gardée que si son texte annonce un travail entièrement
+    à distance (voir :func:`est_teletravail_complet`).
     """
     retenues: list[dict[str, Any]] = []
     ecartees: list[tuple[dict[str, Any], str]] = []
     deja_vues: set[tuple[str, ...]] = set()
 
     for offre in offres:
+        # Provenance posée à la collecte : la règle ne vaut que pour les offres
+        # ramenées par une recherche « télétravail complet ».
+        if offre.get("teletravail_complet_exige") and not est_teletravail_complet(offre):
+            ecartees.append((offre, MOTIF_TELETRAVAIL_PARTIEL))
+            continue
         if not code_rome_retenu(offre, codes_rome):
             ecartees.append((offre, MOTIF_ROME))
             continue

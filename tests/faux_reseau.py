@@ -9,11 +9,16 @@ class FausseReponse:
     """Réponse HTTP minimale, suffisante pour le client."""
 
     def __init__(
-        self, status_code: int, charge: dict[str, Any] | None = None, texte: str = ""
+        self,
+        status_code: int,
+        charge: dict[str, Any] | None = None,
+        texte: str = "",
+        headers: dict[str, str] | None = None,
     ) -> None:
         self.status_code = status_code
         self._charge = charge or {}
         self.text = texte
+        self.headers = headers or {}
 
     def json(self) -> dict[str, Any]:
         return self._charge
@@ -57,6 +62,8 @@ class FauxClient:
         #: Exception levée à chaque appel, pour simuler une API en échec.
         self.erreur = erreur
         self.appels: list[dict[str, Any]] = []
+        #: Total annoncé par l'API, comme le vrai client l'expose.
+        self.dernier_total: int | None = None
 
     def rechercher(
         self,

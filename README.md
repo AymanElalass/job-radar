@@ -156,18 +156,40 @@ plusieurs, chacune avec ses propres critères — par exemple un rayon autour d'
 ```toml
 [[recherche]]
 commune = "66008"       # code INSEE (Argelès-sur-Mer)
-distance = 30           # rayon en km ; 0 = la commune seule, 10 par défaut côté API
+distance = 15           # rayon en km ; 0 = la commune seule, 10 par défaut côté API
 publiee_depuis = 14
 pages_max = 7
 
 [[recherche]]
 mots_cles = ["100% télétravail", "full remote"]
 publiee_depuis = 14
+teletravail_complet = true   # ne garder que le télétravail intégral
 ```
 
 Un **mot-clé n'est pas obligatoire** dès qu'une commune est donnée : la recherche ramène alors
 toutes les offres de la zone. L'API remonte aussi les offres jusqu'à **30 % au-delà** du rayon
 demandé, et `distance` sans `commune` est refusé.
+
+La pagination de l'API est plafonnée (environ 1050 offres par recherche). Quand une recherche
+remplit toutes ses pages, elle **perd des offres**, et `job-radar` le dit, avec le total
+annoncé par l'API :
+
+```
+  ! saturation : toutes offres / commune 66008 (30 km) a rempli ses pages avec 1027 offre(s)
+    sur 1834 trouvée(s) par l'API. Resserrez la zone, la fenêtre de publication, ou
+    augmentez pages_max.
+```
+
+La réponse est alors de découper : deux communes avec des rayons plus petits, ou une fenêtre
+de publication plus courte. Les offres des différentes recherches sont dédoublonnées ensemble
+par identifiant.
+
+`teletravail_complet = true` marque la provenance des offres d'une recherche : le pré-filtre
+n'en gardera que celles dont l'intitulé ou la description annonce un poste **entièrement** à
+distance (« 100 % télétravail », « full remote », « télétravail total », « entièrement à
+distance », « 5j/5 »…). Les autres sont écartées avec le motif « télétravail partiel » — une
+recherche sur « full remote » ramène surtout des offres hybrides. Les offres venues des autres
+recherches ne sont pas concernées.
 
 Les fichiers peuvent être propres à un mode de veille, pour que deux configurations ne
 mélangent ni leur historique ni leur sélection :
@@ -236,7 +258,7 @@ uv run job-radar trier
 | Fichier | Portée | Historique |
 | --- | --- | --- |
 | `config.toml` | métiers informatiques et formation (filtre ROME), France entière | `data/offres.db` |
-| `config-argeles.toml` | tous métiers dans 30 km autour d'Argelès-sur-Mer, plus le télétravail complet partout | `data/argeles.db` |
+| `config-argeles.toml` | tous métiers autour d'Argelès-sur-Mer (15 km) et de Perpignan (10 km), plus le télétravail intégral partout | `data/argeles.db` |
 
 ```bash
 uv run job-radar collecter --config config-argeles.toml

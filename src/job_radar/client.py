@@ -6,6 +6,7 @@ Gère l'authentification OAuth2 (client credentials), la pagination via le param
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Any
 
@@ -21,6 +22,9 @@ TAILLE_PAGE = 150
 
 #: Délai minimal entre deux appels : l'API plafonne à 10 requêtes par seconde.
 DELAI_MIN_ENTRE_APPELS = 0.11
+
+#: En-tête « Content-Range: offres 0-149/1834 » : la plage renvoyée et le total trouvé.
+REGEX_CONTENT_RANGE = re.compile(r"/\s*(\d+)\s*$")
 
 #: Valeurs acceptées par le paramètre ``publieeDepuis`` (en jours).
 PUBLIEE_DEPUIS_VALIDES = (1, 3, 7, 14, 31)
@@ -130,6 +134,20 @@ def _extraire_url(offre: dict[str, Any]) -> str | None:
     return origine.get("urlOrigine")
 
 
+def total_disponible(reponse: Any) -> int | None:
+    """Nombre total d'offres trouvées, lu dans l'en-tête ``Content-Range``.
+
+    L'API le renvoie sous la forme ``offres 0-149/1834``. Il permet de savoir si la
+    pagination a tout ramené ou si la recherche est trop large.
+    """
+    entete = (getattr(reponse, "headers", None) or {}).get("Content-Range")
+    if not entete:
+        return None
+
+    correspondance = REGEX_CONTENT_RANGE.search(str(entete))
+    return int(correspondance.group(1)) if correspondance else None
+
+
 def decrire_recherche(
     mots_cles: str | None = None,
     departement: str | None = None,
@@ -173,6 +191,8 @@ class ClientFranceTravail:
         self._token: str | None = None
         self._token_expire_le: float = 0.0
         self._dernier_appel: float = 0.0
+        #: Total d'offres annoncé par la dernière recherche, si l'API l'a donné.
+        self.dernier_total: int | None = None
 
     # ------------------------------------------------------------------ auth
 
@@ -266,6 +286,8 @@ class ClientFranceTravail:
             },
             timeout=self.timeout,
         )
+
+        self.dernier_total = total_disponible(reponse)
 
         if reponse.status_code == 204:
             return []

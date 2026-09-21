@@ -22,6 +22,7 @@ from job_radar.tri import (
     MOTIF_ROME,
     MOTIF_RQTH,
     MOTIF_STAGE,
+    MOTIF_TELETRAVAIL_PARTIEL,
     MOTIF_TJM,
     MOTS_SENIORITE,
     ErreurReponseLLM,
@@ -39,6 +40,7 @@ from job_radar.tri import (
     est_remunere_au_jour,
     est_rqth,
     est_stage,
+    est_teletravail_complet,
     exige_bac5,
     exige_experience_dans_le_texte,
     exige_experience_longue,
@@ -1322,3 +1324,95 @@ def test_drapeau_experience_transmis_au_tri_d_un_lot():
     assert resultat["drapeaux"] == ["experience"]
     # « experience » n'est pas rédhibitoire : le verdict du modèle est conservé.
     assert resultat["verdict"] == "peut-etre"
+
+
+# --------------------------------------------- télétravail complet exigé
+
+
+@pytest.mark.parametrize(
+    "texte",
+    [
+        "Poste en 100% télétravail",
+        "100 % remote depuis chez vous",
+        "Full remote, équipe distribuée",
+        "Full télétravail",
+        "Télétravail total",
+        "Télétravail complet",
+        "Télétravail intégral",
+        "Poste entièrement à distance",
+        "Travail intégralement à distance",
+        "Télétravail 100%",
+        "Remote first",
+        "Télétravail 5j/5",
+        "Mission en remote",
+        "fully remote position",
+        "100% à distance",
+    ],
+)
+def test_teletravail_complet_reconnu(texte):
+    assert est_teletravail_complet(offre("A", description=texte)) is True
+
+
+@pytest.mark.parametrize(
+    "texte",
+    [
+        "Télétravail possible 2 jours par semaine",
+        "Télétravail hybride, 3 jours sur site",
+        "Poste sur site avec télétravail ponctuel",
+        "Télétravail après période d'intégration",
+        "Aucun télétravail",
+        "Poste basé à Perpignan",
+        "Jusqu'à 2 jours de télétravail par semaine",
+    ],
+)
+def test_teletravail_partiel_non_reconnu(texte):
+    assert est_teletravail_complet(offre("A", description=texte)) is False
+
+
+def test_teletravail_complet_reconnu_dans_l_intitule():
+    assert est_teletravail_complet(offre("A", intitule="Développeur - Full remote")) is True
+
+
+def test_offre_de_recherche_teletravail_ecartee_si_partielle():
+    partielle = offre(
+        "B",
+        intitule="Développeur Python",
+        entreprise="E2",
+        description="Télétravail possible 2 jours par semaine.",
+        teletravail_complet_exige=True,
+    )
+    complete = offre(
+        "C",
+        intitule="Développeuse Java",
+        entreprise="E3",
+        description="Poste en 100% télétravail.",
+        teletravail_complet_exige=True,
+    )
+
+    retenues, ecartees = prefiltrer([partielle, complete])
+
+    assert [o["id"] for o in retenues] == ["C"]
+    assert ecartees == [(partielle, MOTIF_TELETRAVAIL_PARTIEL)]
+
+
+def test_la_regle_ne_vaut_que_pour_les_offres_des_recherches_teletravail():
+    # Même texte, mais l'offre vient de la recherche géographique : on la garde.
+    locale = offre("A", description="Télétravail possible 2 jours par semaine.")
+
+    retenues, ecartees = prefiltrer([locale])
+
+    assert [o["id"] for o in retenues] == ["A"]
+    assert ecartees == []
+
+
+def test_la_regle_teletravail_passe_avant_les_autres_motifs():
+    # Inutile de juger l'expérience d'une offre qui n'est pas en télétravail complet.
+    partielle = offre(
+        "A",
+        description="Télétravail 2 jours par semaine. 5 ans minimum d'expérience.",
+        teletravail_complet_exige=True,
+    )
+
+    _, ecartees = prefiltrer([partielle])
+
+    assert ecartees == [(partielle, MOTIF_TELETRAVAIL_PARTIEL)]

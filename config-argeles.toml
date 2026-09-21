@@ -4,15 +4,25 @@
 #   uv run job-radar collecter --config config-argeles.toml
 #   uv run job-radar trier --config config-argeles.toml
 
-# Toutes les offres dans un rayon de 30 km autour d'Argelès-sur-Mer (INSEE 66008),
-# sans mot-clé. L'API remonte aussi les offres jusqu'à 30 % au-delà du rayon.
+# Les offres autour d'Argelès-sur-Mer, sans mot-clé. Un seul rayon de 30 km
+# saturait la pagination (1027 offres ramenées, plafond atteint) : la zone est
+# donc découpée en deux recherches, dédoublonnées ensemble par identifiant.
+# L'API remonte aussi les offres jusqu'à 30 % au-delà du rayon demandé.
 [[recherche]]
-commune = "66008"
-distance = 30
+commune = "66008"        # Argelès-sur-Mer
+distance = 15
+publiee_depuis = 14
+pages_max = 7
+
+[[recherche]]
+commune = "66136"        # Perpignan, à une vingtaine de kilomètres
+distance = 10
 publiee_depuis = 14
 pages_max = 7
 
 # Et, partout en France, les offres qui annoncent du télétravail complet.
+# « teletravail_complet » marque leur provenance : le pré-filtre n'en gardera
+# que celles dont le texte annonce vraiment un poste entièrement à distance.
 [[recherche]]
 mots_cles = [
   "100% télétravail",
@@ -22,6 +32,7 @@ mots_cles = [
 ]
 publiee_depuis = 14
 pages_max = 3
+teletravail_complet = true
 
 # Fichiers propres à ce mode : l'historique et la sélection ne se mélangent pas
 # avec ceux de la veille informatique.
